@@ -11,15 +11,16 @@ import {
   type KeyboardEvent,
   type ReactNode
 } from 'react'
-import { chipLabel } from '../core/chips'
-import { createEngine, type Engine } from '../core/engine'
-import type { Schema } from '../core/schema'
-import type { Analysis, FieldValues, SavedQuery, Suggestion } from '../core/types'
+import { chipLabel, createEngine, type Analysis, type Engine, type FieldValues, type SavedQuery, type Schema, type Suggestion } from '../core'
 import { HelpDialog } from './HelpDialog'
 import { defaultExamples, defaultLabels, defaultNotes, defaultSyntax, type Labels } from './labels'
 
 const useIsoLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect
 const RECENT_LIMIT = 8
+const CHIP_LIMIT = 50
+const MENU_GAP = 6
+const MENU_MAX = 300
+const MENU_MIN = 120
 const ICON = { width: 17, height: 17, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true } as const
 
 export interface LogQLQueryBoxHandle {
@@ -157,12 +158,15 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
 
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const helpButtonRef = useRef<HTMLButtonElement>(null)
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
   const pendingCaret = useRef<number | null>(null)
   const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const mountRan = useRef(false)
 
   const baseId = useId()
   const listId = `${baseId}-list`
+  const errorId = `${baseId}-error`
   const optionId = (i: number) => `${baseId}-opt-${i}`
 
   const analysis = useMemo(() => engine.analyze(query), [engine, query])
@@ -193,6 +197,37 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
       el.setSelectionRange(pos, pos)
     }
   })
+
+  useIsoLayoutEffect(() => {
+    const list = listRef.current
+    if (!open || !list || !('showPopover' in list)) return
+    list.setAttribute('popover', 'manual')
+    list.showPopover()
+  }, [open])
+
+  useIsoLayoutEffect(() => {
+    const list = listRef.current
+    const anchor = wrapRef.current
+    if (!open || !list || !anchor) return
+    const place = () => {
+      const box = anchor.getBoundingClientRect()
+      const below = window.innerHeight - box.bottom - MENU_GAP * 2
+      const above = box.top - MENU_GAP * 2
+      const upward = below < Math.min(list.scrollHeight, MENU_MAX) && above > below
+      list.style.left = `${box.left}px`
+      list.style.width = `${box.width}px`
+      list.style.top = upward ? 'auto' : `${box.bottom + MENU_GAP}px`
+      list.style.bottom = upward ? `${window.innerHeight - box.top + MENU_GAP}px` : 'auto'
+      list.style.maxHeight = `${Math.max(MENU_MIN, Math.min(MENU_MAX, upward ? above : below))}px`
+    }
+    place()
+    window.addEventListener('resize', place)
+    window.addEventListener('scroll', place, true)
+    return () => {
+      window.removeEventListener('resize', place)
+      window.removeEventListener('scroll', place, true)
+    }
+  }, [open, items])
 
   useEffect(() => {
     if (!open || at < 0) return
@@ -379,7 +414,7 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
         </div>
       )}
 
-      <div className="lqb-wrap">
+      <div className="lqb-wrap" ref={wrapRef}>
         <div className="lqb-box">
           <div className="lqb-row">
             <textarea
@@ -392,6 +427,7 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
               aria-autocomplete="list"
               aria-label={labels.ariaLabel}
               aria-invalid={blocked || undefined}
+              aria-describedby={blocked ? errorId : undefined}
               placeholder={labels.placeholder}
               spellCheck={false}
               autoComplete="off"
@@ -434,13 +470,20 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
           </div>
           {analysis.parsed.children.length > 0 && (
             <div className="lqb-chips">
-              {analysis.parsed.children.map((node, i) => {
+              {analysis.parsed.children.slice(0, CHIP_LIMIT).map((node, i) => {
                 const text = engine.chipText(node)
                 return (
                   <span key={`${node.id}-${i}`} className={engine.isNegative(node) ? 'lqb-chip lqb-chip-neg' : 'lqb-chip'}>
                     <span title={text}>{chipLabel(text)}</span>
                     {interactive && (
-                      <button type="button" aria-label={labels.removeFilter(text)} onClick={() => commit(engine.removeNode(query, node))}>
+                      <button
+                        type="button"
+                        aria-label={labels.removeFilter(text)}
+                        onClick={() => {
+                          commit(engine.removeNode(query, node))
+                          if (analysis.parsed.children.length === 1) inputRef.current?.focus()
+                        }}
+                      >
                         <svg {...ICON} width={10} height={10}>
                           <path d="M5 5l14 14M19 5L5 19" />
                         </svg>
@@ -449,21 +492,39 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
                   </span>
                 )
               })}
+              {analysis.parsed.children.length > CHIP_LIMIT && <span className="lqb-chip lqb-chip-more">{labels.moreFilters(analysis.parsed.children.length - CHIP_LIMIT)}</span>}
             </div>
           )}
         </div>
-        {open && (
-          <div className="lqb-sugg" id={listId} role="listbox" aria-label={labels.ariaLabel} onMouseDown={(e) => e.preventDefault()}>
-            {sugg?.head && sugg.items.length > 0 && <div className="lqb-sg-h">{sugg.head}</div>}
-            {sugg?.items.map((it, i) => row(it, i))}
-            {sugg && sugg.extra.length > 0 && <div className="lqb-sg-h">{labels.savedAndRecent}</div>}
-            {sugg?.extra.map((it, i) => row(it, i + sugg.items.length))}
+        {open && sugg && (
+          <div className="lqb-sugg" ref={listRef} id={listId} role="listbox" aria-label={labels.ariaLabel} onMouseDown={(e) => e.preventDefault()}>
+            {sugg.items.length > 0 && (
+              <div role="group" aria-label={sugg.head || labels.ariaLabel}>
+                {sugg.head && (
+                  <div className="lqb-sg-h" aria-hidden="true">
+                    {sugg.head}
+                  </div>
+                )}
+                {sugg.items.map((it, i) => row(it, i))}
+              </div>
+            )}
+            {sugg.extra.length > 0 && (
+              <div role="group" aria-label={labels.savedAndRecent}>
+                <div className="lqb-sg-h" aria-hidden="true">
+                  {labels.savedAndRecent}
+                </div>
+                {sugg.extra.map((it, i) => row(it, i + sugg.items.length))}
+              </div>
+            )}
           </div>
         )}
+        <span className="lqb-sr" aria-live="polite">
+          {open ? labels.suggestionCount(items.length) : ''}
+        </span>
       </div>
 
       {analysis.error && (
-        <div className="lqb-error" role="alert">
+        <div className="lqb-error" id={errorId} role="alert">
           {analysis.error}
         </div>
       )}

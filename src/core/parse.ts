@@ -30,13 +30,13 @@ function shape(c: Cond, neg: boolean): void {
   }
 }
 
-function addPart(list: ValuePart[], p: ValuePart): void {
-  if (!list.some((x) => x.v === p.v && x.wild === p.wild)) list.push(p)
+function partKey(p: ValuePart): string {
+  return `${p.wild ? '*' : '='}${p.v}`
 }
 
 function mergeSame(kids: QueryNode[]): QueryNode[] {
   const out: QueryNode[] = []
-  const bags = new Map<string, Cond>()
+  const bags = new Map<string, { node: Cond; seen: Set<string>; neg: boolean; merged: boolean }>()
   for (const n of kids) {
     if (n.type !== 'cond' || !n.parts) {
       out.push(n)
@@ -44,22 +44,34 @@ function mergeSame(kids: QueryNode[]): QueryNode[] {
     }
     const neg = isNegative(n)
     const key = `${neg ? '-' : '+'}${n.field}`
-    const seen = bags.get(key)
-    if (seen) {
-      n.parts.forEach((p) => addPart(seen.parts as ValuePart[], p))
-      seen.spans = (seen.spans as Span[]).concat(n.spans as Span[])
-      shape(seen, neg)
+    const bag = bags.get(key)
+    if (!bag) {
+      bags.set(key, { node: n, seen: new Set(n.parts.map(partKey)), neg, merged: false })
+      out.push(n)
       continue
     }
-    bags.set(key, n)
-    out.push(n)
+    bag.merged = true
+    for (const p of n.parts) {
+      if (bag.seen.has(partKey(p))) continue
+      bag.seen.add(partKey(p))
+      ;(bag.node.parts as ValuePart[]).push(p)
+    }
+    for (const span of n.spans as Span[]) (bag.node.spans as Span[]).push(span)
   }
+  for (const bag of bags.values()) if (bag.merged) shape(bag.node, bag.neg)
   return out
 }
 
 function spanOf(nodes: QueryNode[]): Span {
-  const all = nodes.flatMap((n) => n.spans as Span[])
-  return [Math.min(...all.map((x) => x[0])), Math.max(...all.map((x) => x[1]))]
+  let start = Infinity
+  let end = -Infinity
+  for (const n of nodes) {
+    for (const [s, e] of n.spans as Span[]) {
+      start = Math.min(start, s)
+      end = Math.max(end, e)
+    }
+  }
+  return [start, end]
 }
 
 export function parse(src: string, schema: ResolvedSchema, known: Map<string, Map<string, number | undefined>>): ParseResult {
@@ -82,7 +94,13 @@ export function parse(src: string, schema: ResolvedSchema, known: Map<string, Ma
     }
     if (t.kind === 'regex') return C(f, neg ? 'not_regex' : 'regex', t.value as string)
     const parts: ValuePart[] = []
-    for (const part of t.parts as ValuePart[]) addPart(parts, { v: canon(schema, known, f, part.v), wild: part.wild })
+    const seen = new Set<string>()
+    for (const part of t.parts as ValuePart[]) {
+      const next = { v: canon(schema, known, f, part.v), wild: part.wild }
+      if (seen.has(partKey(next))) continue
+      seen.add(partKey(next))
+      parts.push(next)
+    }
     const c = C(f, 'eq', '')
     c.parts = parts
     shape(c, neg)

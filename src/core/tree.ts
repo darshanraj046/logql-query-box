@@ -1,4 +1,4 @@
-import { regexProblem, toJsRegex } from './regex'
+import { isRiskyRegex, regexProblem, toJsRegex } from './regex'
 import type { ResolvedSchema } from './schema'
 import type { ApiFilter, Cond, Group, LogRecord, Op, QueryNode } from './types'
 
@@ -54,6 +54,11 @@ export function problems(n: QueryNode): string[] {
   return n.children.flatMap(problems)
 }
 
+export function hasRiskyRegex(n: QueryNode): boolean {
+  if (n.type === 'group') return n.children.some(hasRiskyRegex)
+  return (n.op === 'regex' || n.op === 'not_regex') && isRiskyRegex(valOf(n))
+}
+
 export function negate(n: QueryNode): QueryNode {
   if (n.type === 'cond') {
     n.op = FLIP[n.op] ?? n.op
@@ -90,9 +95,9 @@ function testCond(c: Cond, r: LogRecord, schema: ResolvedSchema, matchCase: bool
     case 'ends':
       return H.length >= N(v).length && H.slice(H.length - N(v).length) === N(v)
     case 'regex':
-      return toJsRegex(v, ci, !isLine).test(hay)
+      return isRiskyRegex(v) || toJsRegex(v, ci, !isLine).test(hay)
     case 'not_regex':
-      return !toJsRegex(v, ci, !isLine).test(hay)
+      return isRiskyRegex(v) || !toJsRegex(v, ci, !isLine).test(hay)
     case 'in':
       return isLine ? listOf(c).some((x) => H.indexOf(N(x)) >= 0) : listOf(c).indexOf(hay) >= 0
     case 'not_in':

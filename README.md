@@ -36,7 +36,7 @@ Works with `yarn add` and `pnpm add` too. React 18 or newer is required.
 To install directly from GitHub instead, pin a tag. The built files are committed, so there is no build step.
 
 ```bash
-npm install github:darshanraj046/logql-query-box#v0.1.0
+npm install github:darshanraj046/logql-query-box#v0.1.1
 ```
 
 ## Quick start
@@ -71,10 +71,11 @@ export function LogSearch() {
 | `logql.count` | The number of branches. |
 | `filter` | The same filter as a JSON tree, for backends that build their own queries. `null` when empty. |
 | `tree` | The parsed condition tree. |
+| `riskyRegex` | `true` when a regex here is safe on Loki but too slow to run in a browser. See [Limits](#limits). |
 
 ### Why several branches?
 
-LogQL cannot express an arbitrary AND/OR tree in one query, so the filter is expanded into an OR of AND-branches. `(a OR b) (c OR d)` becomes four queries. Run each one with `query_range`, then merge and de-duplicate by timestamp and line. Filters that would need more than 12 queries are blocked with a message suggesting comma lists. Change the limit with `maxBranches`.
+The compiler turns a filter into an OR of AND-branches, with one LogQL query per branch, so `(a OR b) (c OR d)` becomes four queries. Run each one with `query_range`, then merge and de-duplicate by timestamp and line. Filters that would need more than 12 queries are blocked with a message suggesting comma lists. Change the limit with `maxBranches`.
 
 ## The search language
 
@@ -216,7 +217,7 @@ result.filter
 | `evaluate(tree, record)` | Test a record in JavaScript, for client side filtering or demos. |
 | `suggest(query, caret, extras?)` | The suggestion list, to build your own UI. |
 | `chipText(node)`, `isNegative(node)` | Chip rendering. |
-| `highlightPattern(tree)` | A `RegExp` for highlighting matched text in log lines, or `null`. |
+| `highlightPattern(tree)` | A `RegExp` for highlighting matched text in log lines, or `null`. Leaves out risky regexes. |
 | `removeNode`, `toggleValue`, `appendTerm`, `clearField`, `activeValues` | Query text editing. |
 
 ## Theming
@@ -244,7 +245,9 @@ Generated queries are tested against a real Loki server, which surfaced behavior
 
 ## Limits
 
+- **Risky regexes do not run in the browser.** Loki uses RE2, which stays fast on any pattern. The JavaScript regex engine can stall on patterns such as `(a+)+b`, even on a short line, and it cannot be interrupted. These patterns are detected first: `evaluate()` does not apply that condition, `highlightPattern()` leaves it out, and `analysis.riskyRegex` is `true`. The query still compiles and runs on Loki as normal. The check is cautious, so a few harmless patterns are skipped too, such as `(a+b)+`. Use `isRiskyRegex(pattern)` to ask the same question in your own code.
 - `evaluate()` runs on the JavaScript regex engine after translating RE2 syntax. Flags set in the middle of a pattern, such as `a(?i)b`, are validated but not applied there. Loki itself handles them correctly, so only client side filtering is affected.
+- Only the first 50 chips are shown, followed by a count of the rest. The filter still uses every term.
 - The component builds queries. Running them, time ranges and results are yours, which keeps it usable with any backend.
 
 ## Development
@@ -263,6 +266,8 @@ npm run check
 | `test/prototype-parity.test.ts` | Thousands of random queries behave the same as the original implementation, kept in `test/oracle`. |
 | `test/fixes.test.ts` | Every intentional difference from that implementation, showing both the old and the new result. |
 | `test/regex.test.ts` | Regex validation agrees with Go `regexp/syntax` on over 20,000 patterns. |
+| `test/regex-safety.test.ts` | Every regex judged safe finishes quickly on worst case input, checked in a sandbox that can stop it. |
+| `test/contrast.test.ts` | Text colors meet WCAG AA in both themes. |
 | `test/invariants.test.ts` | Properties that must hold for any input, including garbage. |
 | `test/component.test.tsx` | The React component, with real keyboard and mouse events. |
 | `test/ssr.test.tsx` | Rendering with no browser globals. |

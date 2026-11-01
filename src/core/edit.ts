@@ -1,3 +1,4 @@
+import { MAX_DEPTH } from './parse'
 import type { ResolvedSchema } from './schema'
 import { tokenize } from './tokenize'
 import { isNegative } from './tree'
@@ -17,7 +18,7 @@ export function tidy(q: string, schema: ResolvedSchema): string {
   const tk = tokenize(q, schema)
   if (tk.error) return q.trim()
   let toks: Token[] = tk.toks
-  for (let changed = true; changed; ) {
+  for (let pass = 0, changed = true; changed && pass <= MAX_DEPTH; pass++) {
     changed = false
     const real = toks.filter((t) => t.t !== 'skip')
     const drop = new Set<Token>()
@@ -47,7 +48,7 @@ export function tidy(q: string, schema: ResolvedSchema): string {
 }
 
 export function editSpans(q: string, spans: Span[], text: string, schema: ResolvedSchema): string {
-  const first = Math.min(...spans.map((s) => s[0]))
+  const first = spans.reduce((lowest, s) => Math.min(lowest, s[0]), Infinity)
   let out = q
   for (const s of spans.slice().sort((a, b) => b[0] - a[0])) {
     out = out.slice(0, s[0]) + (s[0] === first ? text : ' ') + out.slice(s[1])

@@ -104,6 +104,14 @@ describe('wildcards', () => {
     expect(newTree('app:foo* app:bar')).toEqual(and(cond('service_name', 'regex', 'foo.*|bar')))
   })
 
+  it('evaluates a list of wildcards without treating it as risky', () => {
+    const a = engine.analyze('app:checkout-* app:*-service')
+    expect(a.riskyRegex).toBe(false)
+    expect(engine.evaluate(a.tree, { service_name: 'checkout-api' })).toBe(true)
+    expect(engine.evaluate(a.tree, { service_name: 'auth-service' })).toBe(true)
+    expect(engine.evaluate(a.tree, { service_name: 'billing-worker' })).toBe(false)
+  })
+
   it('keeps a star literal when it is quoted', () => {
     expect(oldTree('app:"a*b"')).toEqual(and(cond('service_name', 'regex', 'a.*b')))
     expect(newTree('app:"a*b"')).toEqual(and(cond('service_name', 'eq', 'a*b')))

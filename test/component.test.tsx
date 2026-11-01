@@ -909,6 +909,179 @@ describe('customisation', () => {
   })
 })
 
+describe('screen readers', () => {
+  it('links the error to the input', async () => {
+    const { user } = setup({ defaultValue: '"bad' })
+    const alert = screen.getByRole('alert')
+    expect(alert.id).toBeTruthy()
+    expect(box()).toHaveAttribute('aria-describedby', alert.id)
+    await user.type(box(), '"')
+    expect(box()).not.toHaveAttribute('aria-describedby')
+  })
+
+  it('announces how many suggestions there are', async () => {
+    const { user } = setup()
+    const live = document.querySelector('.lqb-sr') as HTMLElement
+    expect(live).toHaveAttribute('aria-live', 'polite')
+    expect(live).toHaveTextContent('')
+    await user.click(box())
+    expect(live).toHaveTextContent('4 suggestions available')
+    await user.type(box(), 'le')
+    expect(live).toHaveTextContent('1 suggestion available')
+    await user.keyboard('{Escape}')
+    expect(live).toHaveTextContent('')
+  })
+
+  it('groups suggestions under named headings', async () => {
+    const { user } = setup({ saved: SAVED })
+    await user.click(box())
+    const fields = screen.getByRole('group', { name: 'Filter by' })
+    expect(within(fields).getAllByRole('option')).toHaveLength(4)
+    expect(within(screen.getByRole('group', { name: 'Saved and recent' })).getAllByRole('option')).toHaveLength(3)
+    expect(options().map((o) => o.id)).toHaveLength(new Set(options().map((o) => o.id)).size)
+  })
+
+  it('keeps option ids continuous across groups for the arrow keys', async () => {
+    const { user } = setup({ saved: SAVED })
+    await user.click(box())
+    await user.keyboard('{ArrowUp}')
+    expect(selected()).toBe('Timeouts')
+    expect(box()).toHaveAttribute('aria-activedescendant', options()[options().length - 1].id)
+  })
+
+  it('moves focus to the box when the last chip is removed', async () => {
+    const { user } = setup({ defaultValue: 'a' })
+    screen.getByRole('button', { name: 'Remove filter \u201ca\u201d' }).focus()
+    await user.keyboard('{Enter}')
+    expect(box()).toHaveFocus()
+  })
+
+  it('leaves focus alone when other chips remain', async () => {
+    const { user } = setup({ defaultValue: 'a b' })
+    await user.click(screen.getByRole('button', { name: 'Remove filter \u201ca\u201d' }))
+    expect(box()).not.toHaveFocus()
+  })
+})
+
+describe('many chips', () => {
+  const words = (n: number) => Array.from({ length: n }, (_, i) => `w${i}`).join(' ')
+  const chips = () => document.querySelectorAll('.lqb-chip:not(.lqb-chip-more)')
+
+  it('shows all chips up to the limit', () => {
+    setup({ defaultValue: words(50) })
+    expect(chips()).toHaveLength(50)
+    expect(document.querySelector('.lqb-chip-more')).toBeNull()
+  })
+
+  it('shows the first 50 and counts the rest', () => {
+    setup({ defaultValue: words(5000) })
+    expect(chips()).toHaveLength(50)
+    expect(document.querySelector('.lqb-chip-more')).toHaveTextContent('+4950 more')
+  })
+
+  it('still runs and compiles the whole filter', async () => {
+    const { user, onExecute } = setup({ defaultValue: words(60) })
+    await user.click(execute())
+    expect(onExecute.mock.calls[0][0].logql.branches[0].split('\n')).toHaveLength(61)
+  })
+
+  it('removing a chip brings the next one into view', async () => {
+    const { user } = setup({ defaultValue: words(51) })
+    await user.click(screen.getByRole('button', { name: 'Remove filter \u201cw0\u201d' }))
+    expect(chips()).toHaveLength(50)
+    expect(document.querySelector('.lqb-chip-more')).toBeNull()
+    expect(screen.getByText('\u201cw50\u201d')).toBeInTheDocument()
+  })
+
+  it('can be translated', () => {
+    setup({ defaultValue: words(52), labels: { moreFilters: (n) => `y ${n} mas` } })
+    expect(document.querySelector('.lqb-chip-more')).toHaveTextContent('y 2 mas')
+  })
+})
+
+describe('suggestion placement', () => {
+  const rect = (top: number, bottom: number, left = 20, width = 500) => vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ top, bottom, left, width, right: left + width, height: bottom - top, x: left, y: top, toJSON: () => ({}) })
+  const list = () => screen.getByRole('listbox')
+
+  it('opens in the top layer so a parent cannot clip it', async () => {
+    const showPopover = vi.fn()
+    HTMLElement.prototype.showPopover = showPopover
+    const { user } = setup()
+    await user.click(box())
+    expect(document.querySelector('.lqb-sugg')).toHaveAttribute('popover', 'manual')
+    expect(showPopover).toHaveBeenCalledTimes(1)
+    await user.type(box(), 'l')
+    expect(showPopover).toHaveBeenCalledTimes(1)
+    delete (HTMLElement.prototype as Partial<HTMLElement>).showPopover
+  })
+
+  it('works in browsers without popover support', async () => {
+    const { user } = setup()
+    await user.click(box())
+    expect('showPopover' in list()).toBe(false)
+    expect(list()).not.toHaveAttribute('popover')
+    expect(options().length).toBeGreaterThan(0)
+  })
+
+  it('stays inside the box element in the DOM, so host dialogs keep working', async () => {
+    const { user } = setup({ className: 'host' })
+    await user.click(box())
+    expect(list().closest('.lqb.host')).toBeTruthy()
+  })
+
+  it('opens below the box and matches its width', async () => {
+    const spy = rect(100, 160)
+    const { user } = setup()
+    await user.click(box())
+    expect(list()).toHaveStyle({ left: '20px', width: '500px', top: '166px', bottom: 'auto', maxHeight: '300px' })
+    spy.mockRestore()
+  })
+
+  it('flips above the box near the bottom of the screen', async () => {
+    const spy = rect(700, 760)
+    const { user } = setup()
+    await user.click(box())
+    expect(list()).toHaveStyle({ top: 'auto', bottom: `${window.innerHeight - 700 + 6}px`, maxHeight: '300px' })
+    spy.mockRestore()
+  })
+
+  it('stays below when there is more room there', async () => {
+    const spy = rect(5, 700)
+    const { user } = setup()
+    await user.click(box())
+    expect(list()).toHaveStyle({ top: '706px', bottom: 'auto' })
+    spy.mockRestore()
+  })
+
+  it('never gets too short to use', async () => {
+    const spy = rect(10, window.innerHeight - 10)
+    const { user } = setup()
+    await user.click(box())
+    expect(list()).toHaveStyle({ maxHeight: '120px' })
+    spy.mockRestore()
+  })
+
+  it('follows the box on scroll and resize, then stops', async () => {
+    const spy = rect(100, 160)
+    const remove = vi.spyOn(window, 'removeEventListener')
+    const { user } = setup()
+    await user.click(box())
+    spy.mockRestore()
+    const moved = rect(50, 110, 40, 300)
+    fireEvent.scroll(document.body)
+    expect(list()).toHaveStyle({ top: '116px', left: '40px', width: '300px' })
+    moved.mockRestore()
+    const resized = rect(200, 260, 10, 200)
+    fireEvent(window, new Event('resize'))
+    expect(list()).toHaveStyle({ top: '266px', left: '10px', width: '200px' })
+    resized.mockRestore()
+    await user.keyboard('{Escape}')
+    expect(remove).toHaveBeenCalledWith('scroll', expect.any(Function), true)
+    expect(remove).toHaveBeenCalledWith('resize', expect.any(Function))
+    remove.mockRestore()
+  })
+})
+
 describe('more than one box on a page', () => {
   it('keeps ids unique and state separate', async () => {
     const user = userEvent.setup()

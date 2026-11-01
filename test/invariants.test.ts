@@ -235,6 +235,46 @@ describe('performance', () => {
     expect(performance.now() - t).toBeLessThan(1000)
   })
 
+  it('handles a huge paste without a stack error', () => {
+    const q = Array.from({ length: 300000 }, (_, i) => `w${i}`).join(' ')
+    const a = engine.analyze(q)
+    expect(a.error).toBeNull()
+    expect(a.parsed.children).toHaveLength(300000)
+  })
+
+  it('compiles a very long AND in linear time', () => {
+    const q = Array.from({ length: 100000 }, (_, i) => `w${i}`).join(' ')
+    const t = performance.now()
+    expect(engine.analyze(q).logql.branches).toHaveLength(1)
+    expect(performance.now() - t).toBeLessThan(4000)
+  })
+
+  it('merges a field repeated thousands of times quickly and without duplicates', () => {
+    const q = Array.from({ length: 20000 }, (_, i) => `app:v${i % 15000}`).join(' ')
+    const t = performance.now()
+    const p = engine.parse(q)
+    expect(performance.now() - t).toBeLessThan(2000)
+    expect(p.children).toHaveLength(1)
+    expect((p.children[0] as { value: string[] }).value).toHaveLength(15000)
+    expect(p.children[0].spans).toHaveLength(20000)
+  })
+
+  it('edits a query with very many spans', () => {
+    const q = Array.from({ length: 120000 }, (_, i) => `app:v${i}`).join(' ')
+    expect(engine.clearField(q, 'service_name')).toBe('')
+  })
+
+  it('keeps the order of conditions when expanding branches', () => {
+    expect(engine.analyze('a (b OR c) d (e OR f)').logql.branches.map((b) => b.split('\n').slice(1).map((l) => l.replace(/.*\(\?i\)|"/g, '')).join(''))).toEqual(['abde', 'abdf', 'acde', 'acdf'])
+  })
+
+  it('does not stall tidying absurd bracket nesting', () => {
+    const q = `${'('.repeat(20000)}${')'.repeat(20000)}`
+    const t = performance.now()
+    engine.appendTerm(q, 'line', ['x'])
+    expect(performance.now() - t).toBeLessThan(2000)
+  })
+
   it('evaluates with a bounded regex cache', () => {
     for (let i = 0; i < 2000; i++) engine.analyze(`/r${i}/`)
     expect(engine.analyze('/r1/').error).toBeNull()

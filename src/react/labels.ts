@@ -25,6 +25,8 @@ export interface Labels {
   fixFilter: string
   filterChanged: string
   removeFilter: (text: string) => string
+  moreFilters: (count: number) => string
+  suggestionCount: (count: number) => string
   savedAndRecent: string
 }
 
@@ -55,6 +57,8 @@ export const defaultLabels: Labels = {
   fixFilter: 'Fix the filter before running it.',
   filterChanged: 'Filter changed. Press Execute.',
   removeFilter: (text) => `Remove filter ${text}`,
+  moreFilters: (count) => `+${count} more`,
+  suggestionCount: (count) => `${count} ${count === 1 ? 'suggestion' : 'suggestions'} available`,
   savedAndRecent: 'Saved and recent'
 }
 

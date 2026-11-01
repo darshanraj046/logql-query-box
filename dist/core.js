@@ -19,6 +19,15 @@ var POSIX = {
 };
 var SIMPLE_ESCAPE = { a: 7, f: 12, n: 10, r: 13, t: 9, v: 11 };
 var CACHE_LIMIT = 500;
+var LOOP_LIMIT = 4;
+var LONG_REPEAT = 10;
+var WIDE_REPEAT_LIMIT = 4;
+var OVERLAP_SAMPLE = [...Array.from({ length: 118 }, (_, i) => String.fromCharCode(i + 9)), "\xE9", "\u4E2D", "\u{1F600}"];
+var RISK_ATOM = /\\u\{[0-9a-f]+\}|\\[pP]\{[^}]*\}|\\.|\[(?:\\.|[^\]\\])*\]|[\s\S]/uy;
+var RISK_REPEAT = /(?:\*|\+|\?|\{(\d+)(?:(,)(\d*))?\})\??/y;
+var LITERAL_ATOM = /^(?:\\u\{[0-9a-f]+\}|[^\\.[\]])$/u;
+var WIDE_ATOM = /^(?:\.|\[\^|\\[DSWP])/;
+var ZERO_WIDTH_ATOM = /^(?:\^|\$|\\[bB])$/;
 var point = (cp) => `\\u{${cp.toString(16)}}`;
 function readEscape(p, i) {
   const d = p[i + 1];
@@ -148,12 +157,95 @@ function readClass(p, start) {
   if (i >= p.length) return { problem: INVALID_REGEX };
   return { js: `${out}]`, next: i + 1 };
 }
+function sharesCharacters(a, b) {
+  if (!a || !b || a === b) return true;
+  try {
+    const left = new RegExp(`^(?:${a})$`, "iu");
+    const right = new RegExp(`^(?:${b})$`, "iu");
+    return OVERLAP_SAMPLE.some((ch) => left.test(ch) && right.test(ch));
+  } catch {
+    return true;
+  }
+}
+function isRisky(source) {
+  let pending = [];
+  const frame = () => ({ varying: false, firsts: [], first: null, required: false, nullable: false, entry: pending, exits: [] });
+  const stack = [frame()];
+  let wide = 0;
+  let i = 0;
+  while (i < source.length) {
+    const c = source[i];
+    if (c === "(") {
+      i += source[i + 1] === "?" ? 3 : 1;
+      stack.push(frame());
+      continue;
+    }
+    if (c === "|") {
+      const top = stack[stack.length - 1];
+      top.firsts.push(top.first ?? "");
+      top.first = null;
+      if (!top.required) top.nullable = true;
+      top.required = false;
+      top.exits.push(...pending);
+      pending = top.entry;
+      wide = 0;
+      i++;
+      continue;
+    }
+    let atom = "";
+    let group;
+    if (c === ")") {
+      group = stack.pop();
+      i++;
+    } else {
+      RISK_ATOM.lastIndex = i;
+      atom = RISK_ATOM.exec(source)[0];
+      i += atom.length;
+    }
+    RISK_REPEAT.lastIndex = i;
+    const q = RISK_REPEAT.exec(source);
+    let min = 1;
+    let max = 1;
+    if (q) {
+      i += q[0].length;
+      const head = q[0][0];
+      min = head === "+" || head === "{" ? Number(q[1] ?? 1) : 0;
+      max = head === "?" ? 1 : head !== "{" ? Infinity : q[2] ? q[3] ? Number(q[3]) : Infinity : min;
+    }
+    const parent = stack[stack.length - 1];
+    let repeated = atom;
+    if (group) {
+      const branches = [...group.firsts, group.first ?? ""];
+      repeated = branches.length === 1 ? branches[0] : "";
+      const exits = [...group.exits, ...pending];
+      pending = max >= LONG_REPEAT ? group.entry : min === 0 ? [...group.entry, ...exits] : exits;
+      const overlap = branches.length > 1 && (branches.includes("") || new Set(branches).size < branches.length);
+      const nullable = group.nullable || !group.required;
+      if (max >= LOOP_LIMIT && (group.varying || overlap)) return true;
+      if (max > 1 && group.varying && nullable) return true;
+      if (group.varying) parent.varying = true;
+      if (min > 0 && !nullable) parent.required = true;
+    } else if (min > 0) {
+      parent.required = true;
+    }
+    if (min !== max) parent.varying = true;
+    if (parent.first === null) parent.first = !group && min > 0 && LITERAL_ATOM.test(atom) ? atom.toLowerCase() : "";
+    if (max >= LONG_REPEAT) {
+      if (pending.some((earlier) => sharesCharacters(earlier, repeated))) return true;
+      if (WIDE_ATOM.test(atom) && ++wide >= WIDE_REPEAT_LIMIT) return true;
+      pending = min > 0 ? [repeated] : [...pending, repeated];
+    } else if (!group && min > 0 && !ZERO_WIDTH_ATOM.test(atom)) {
+      pending = pending.filter((earlier) => !WIDE_ATOM.test(earlier) && sharesCharacters(earlier, atom));
+    }
+  }
+  return false;
+}
 function translate(p) {
   let out = "";
   let flags = "u";
   let i = 0;
   let caseSensitive = false;
-  const stop = (problem) => ({ source: "", flags: "", problem, caseSensitive });
+  const stop = (problem) => ({ source: "", flags: "", problem, caseSensitive, risky: false });
   while (i < p.length) {
     const c = p[i];
     if (c === "\\") {
@@ -267,7 +359,7 @@ function translate(p) {
   } catch {
     return stop(INVALID_REGEX);
   }
-  return { source: out, flags, problem: null, caseSensitive };
+  return { source: out, flags, problem: null, caseSensitive, risky: isRisky(out) };
 }
 var cache = /* @__PURE__ */ new Map();
 function translated(p) {
@@ -281,6 +373,9 @@ function translated(p) {
 }
 function regexProblem(p) {
   return translated(p).problem;
+}
+function isRiskyRegex(p) {
+  return translated(p).risky;
 }
 function toJsRegex(p, ci, anchored) {
   const t = translated(p);
@@ -341,6 +436,10 @@ function problems(n) {
   }
   return n.children.flatMap(problems);
 }
+function hasRiskyRegex(n) {
+  if (n.type === "group") return n.children.some(hasRiskyRegex);
+  return (n.op === "regex" || n.op === "not_regex") && isRiskyRegex(valOf(n));
+}
 function negate(n) {
   if (n.type === "cond") {
     n.op = FLIP[n.op] ?? n.op;
@@ -375,9 +474,9 @@ function testCond(c, r, schema, matchCase) {
     case "ends":
       return H.length >= N(v).length && H.slice(H.length - N(v).length) === N(v);
     case "regex":
-      return toJsRegex(v, ci, !isLine).test(hay);
+      return isRiskyRegex(v) || toJsRegex(v, ci, !isLine).test(hay);
     case "not_regex":
-      return !toJsRegex(v, ci, !isLine).test(hay);
+      return isRiskyRegex(v) || !toJsRegex(v, ci, !isLine).test(hay);
     case "in":
       return isLine ? listOf(c).some((x) => H.indexOf(N(x)) >= 0) : listOf(c).indexOf(hay) >= 0;
     case "not_in":
@@ -437,7 +536,18 @@ function dnf(n) {
   if (n.type === "cond") return [[n]];
   const parts = n.children.map(dnf);
   if (n.op === "OR") return parts.flat();
-  return parts.reduce((acc, p) => acc.flatMap((a) => p.map((b) => a.concat(b))), [[]]);
+  const total = parts.reduce((product, p) => product * p.length, 1);
+  const out = [];
+  for (let k = 0; k < total; k++) {
+    const branch = [];
+    let stride = total;
+    for (const p of parts) {
+      stride /= p.length;
+      for (const c of p[Math.floor(k / stride) % p.length]) branch.push(c);
+    }
+    out.push(branch);
+  }
+  return out;
 }
 function logqlString(s) {
   return `"${String(s).replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\r/g, "\\r").replace(/\t/g, "\\t")}"`;
@@ -702,93 +812,6 @@ function tokenize(src, schema) {
   return { toks };
 }
 
-// src/core/edit.ts
-function quoteValue(v) {
-  if (v !== "" && !/[\s(),"\\*]/.test(v) && v[0] !== "/") return v;
-  return `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
-}
-function termText(schema, field, parts, neg) {
-  const primary = schema.fields.get(field)?.primary ?? field;
-  return `${neg ? "-" : ""}${primary}:${parts.map((p) => p.wild ? p.v : quoteValue(p.v)).join(",")}`;
-}
-function tidy(q, schema) {
-  const tk = tokenize(q, schema);
-  if (tk.error) return q.trim();
-  let toks = tk.toks;
-  for (let changed = true; changed; ) {
-    changed = false;
-    const real = toks.filter((t) => t.t !== "skip");
-    const drop = /* @__PURE__ */ new Set();
-    real.forEach((t, i) => {
-      const prev = real[i - 1];
-      const next = real[i + 1];
-      const isOp = (x) => x?.t === "and" || x?.t === "or";
-      if (t.t === "(" && next?.t === ")") {
-        drop.add(t);
-        drop.add(next);
-      } else if (isOp(t) && (!prev || prev.t === "(" || isOp(prev) || !next || next.t === ")")) {
-        drop.add(t);
-      }
-    });
-    if (drop.size) {
-      toks = toks.filter((t) => !drop.has(t));
-      changed = true;
-    }
-  }
-  let out = "";
-  toks.forEach((t, i) => {
-    const prev = toks[i - 1];
-    if (prev && prev.e !== t.s && prev.t !== "(" && t.t !== ")") out += " ";
-    out += q.slice(t.s, t.e);
-  });
-  return out;
-}
-function editSpans(q, spans, text, schema) {
-  const first = Math.min(...spans.map((s) => s[0]));
-  let out = q;
-  for (const s of spans.slice().sort((a, b) => b[0] - a[0])) {
-    out = out.slice(0, s[0]) + (s[0] === first ? text : " ") + out.slice(s[1]);
-  }
-  return tidy(out, schema);
-}
-function appendTerm(q, text, schema) {
-  const base = tidy(q, schema);
-  if (!base) return text;
-  const tk = tokenize(base, schema);
-  let depth = 0;
-  let topLevelOr = false;
-  for (const t of tk.toks) {
-    if (t.t === "(") depth++;
-    else if (t.t === ")") depth--;
-    else if (t.t === "or" && depth === 0) topLevelOr = true;
-  }
-  return topLevelOr ? `(${base}) ${text}` : `${base} ${text}`;
-}
-function isValueTerm(n, field, neg) {
-  return n.type === "cond" && n.field === field && !!n.parts && isNegative(n) === neg;
-}
-function activeValues(parsed, field, neg) {
-  const set = /* @__PURE__ */ new Set();
-  for (const n of parsed.children) if (isValueTerm(n, field, neg)) n.parts.forEach((p) => set.add(p.v));
-  return set;
-}
-function facetEdit(q, parsed, schema, field, value, neg) {
-  const single = { v: value, wild: false };
-  if (parsed.error) return appendTerm(q, termText(schema, field, [single], neg), schema);
-  const found = parsed.children.find((n) => isValueTerm(n, field, neg));
-  if (!found) return appendTerm(q, termText(schema, field, [single], neg), schema);
-  const parts = found.parts.slice();
-  const at = parts.findIndex((p) => p.v === value);
-  if (at >= 0) parts.splice(at, 1);
-  else parts.push(single);
-  return editSpans(q, found.spans, parts.length ? termText(schema, field, parts, neg) : "", schema);
-}
-function clearField(q, parsed, schema, field) {
-  if (parsed.error) return q;
-  const spans = parsed.children.flatMap((n) => n.type === "cond" && n.field === field ? n.spans : []);
-  return spans.length ? editSpans(q, spans, "", schema) : q;
-}
-
 // src/core/parse.ts
 var MAX_DEPTH = 100;
 function canon(schema, known, field, v) {
@@ -813,8 +836,8 @@ function shape(c, neg) {
     c.value = parts.length ? parts[0].v : "";
   }
 }
-function addPart(list, p) {
-  if (!list.some((x) => x.v === p.v && x.wild === p.wild)) list.push(p);
+function partKey(p) {
+  return `${p.wild ? "*" : "="}${p.v}`;
 }
 function mergeSame(kids) {
   const out = [];
@@ -826,21 +849,33 @@ function mergeSame(kids) {
     }
     const neg = isNegative(n);
     const key = `${neg ? "-" : "+"}${n.field}`;
-    const seen = bags.get(key);
-    if (seen) {
-      n.parts.forEach((p) => addPart(seen.parts, p));
-      seen.spans = seen.spans.concat(n.spans);
-      shape(seen, neg);
+    const bag = bags.get(key);
+    if (!bag) {
+      bags.set(key, { node: n, seen: new Set(n.parts.map(partKey)), neg, merged: false });
+      out.push(n);
       continue;
     }
-    bags.set(key, n);
-    out.push(n);
+    bag.merged = true;
+    for (const p of n.parts) {
+      if (bag.seen.has(partKey(p))) continue;
+      bag.seen.add(partKey(p));
+      bag.node.parts.push(p);
+    }
+    for (const span of n.spans) bag.node.spans.push(span);
   }
+  for (const bag of bags.values()) if (bag.merged) shape(bag.node, bag.neg);
   return out;
 }
 function spanOf(nodes) {
-  const all = nodes.flatMap((n) => n.spans);
-  return [Math.min(...all.map((x) => x[0])), Math.max(...all.map((x) => x[1]))];
+  let start = Infinity;
+  let end = -Infinity;
+  for (const n of nodes) {
+    for (const [s, e] of n.spans) {
+      start = Math.min(start, s);
+      end = Math.max(end, e);
+    }
+  }
+  return [start, end];
 }
 function parse(src, schema, known) {
   const tk = tokenize(src, schema);
@@ -860,7 +895,13 @@ function parse(src, schema, known) {
     }
     if (t.kind === "regex") return C(f, neg ? "not_regex" : "regex", t.value);
     const parts = [];
-    for (const part of t.parts) addPart(parts, { v: canon(schema, known, f, part.v), wild: part.wild });
+    const seen = /* @__PURE__ */ new Set();
+    for (const part of t.parts) {
+      const next = { v: canon(schema, known, f, part.v), wild: part.wild };
+      if (seen.has(partKey(next))) continue;
+      seen.add(partKey(next));
+      parts.push(next);
+    }
     const c = C(f, "eq", "");
     c.parts = parts;
     shape(c, neg);
@@ -925,6 +966,93 @@ function parse(src, schema, known) {
   } catch (e) {
     return { error: e.message, children: [] };
   }
+}
+
+// src/core/edit.ts
+function quoteValue(v) {
+  if (v !== "" && !/[\s(),"\\*]/.test(v) && v[0] !== "/") return v;
+  return `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+function termText(schema, field, parts, neg) {
+  const primary = schema.fields.get(field)?.primary ?? field;
+  return `${neg ? "-" : ""}${primary}:${parts.map((p) => p.wild ? p.v : quoteValue(p.v)).join(",")}`;
+}
+function tidy(q, schema) {
+  const tk = tokenize(q, schema);
+  if (tk.error) return q.trim();
+  let toks = tk.toks;
+  for (let pass = 0, changed = true; changed && pass <= MAX_DEPTH; pass++) {
+    changed = false;
+    const real = toks.filter((t) => t.t !== "skip");
+    const drop = /* @__PURE__ */ new Set();
+    real.forEach((t, i) => {
+      const prev = real[i - 1];
+      const next = real[i + 1];
+      const isOp = (x) => x?.t === "and" || x?.t === "or";
+      if (t.t === "(" && next?.t === ")") {
+        drop.add(t);
+        drop.add(next);
+      } else if (isOp(t) && (!prev || prev.t === "(" || isOp(prev) || !next || next.t === ")")) {
+        drop.add(t);
+      }
+    });
+    if (drop.size) {
+      toks = toks.filter((t) => !drop.has(t));
+      changed = true;
+    }
+  }
+  let out = "";
+  toks.forEach((t, i) => {
+    const prev = toks[i - 1];
+    if (prev && prev.e !== t.s && prev.t !== "(" && t.t !== ")") out += " ";
+    out += q.slice(t.s, t.e);
+  });
+  return out;
+}
+function editSpans(q, spans, text, schema) {
+  const first = spans.reduce((lowest, s) => Math.min(lowest, s[0]), Infinity);
+  let out = q;
+  for (const s of spans.slice().sort((a, b) => b[0] - a[0])) {
+    out = out.slice(0, s[0]) + (s[0] === first ? text : " ") + out.slice(s[1]);
+  }
+  return tidy(out, schema);
+}
+function appendTerm(q, text, schema) {
+  const base = tidy(q, schema);
+  if (!base) return text;
+  const tk = tokenize(base, schema);
+  let depth = 0;
+  let topLevelOr = false;
+  for (const t of tk.toks) {
+    if (t.t === "(") depth++;
+    else if (t.t === ")") depth--;
+    else if (t.t === "or" && depth === 0) topLevelOr = true;
+  }
+  return topLevelOr ? `(${base}) ${text}` : `${base} ${text}`;
+}
+function isValueTerm(n, field, neg) {
+  return n.type === "cond" && n.field === field && !!n.parts && isNegative(n) === neg;
+}
+function activeValues(parsed, field, neg) {
+  const set = /* @__PURE__ */ new Set();
+  for (const n of parsed.children) if (isValueTerm(n, field, neg)) n.parts.forEach((p) => set.add(p.v));
+  return set;
+}
+function facetEdit(q, parsed, schema, field, value, neg) {
+  const single = { v: value, wild: false };
+  if (parsed.error) return appendTerm(q, termText(schema, field, [single], neg), schema);
+  const found = parsed.children.find((n) => isValueTerm(n, field, neg));
+  if (!found) return appendTerm(q, termText(schema, field, [single], neg), schema);
+  const parts = found.parts.slice();
+  const at = parts.findIndex((p) => p.v === value);
+  if (at >= 0) parts.splice(at, 1);
+  else parts.push(single);
+  return editSpans(q, found.spans, parts.length ? termText(schema, field, parts, neg) : "", schema);
+}
+function clearField(q, parsed, schema, field) {
+  if (parsed.error) return q;
+  const spans = parsed.children.flatMap((n) => n.type === "cond" && n.field === field ? n.spans : []);
+  return spans.length ? editSpans(q, spans, "", schema) : q;
 }
 
 // src/core/schema.ts
@@ -1168,16 +1296,16 @@ function createEngine(options = {}) {
     isNegative,
     analyze(query) {
       const parsed = parseQuery(query);
-      if (parsed.error) return { query, parsed, error: parsed.error, tree: null, logql: NO_LOGQL, filter: null };
+      if (parsed.error) return { query, parsed, error: parsed.error, tree: null, logql: NO_LOGQL, filter: null, riskyRegex: false };
       const found = problems(parsed.root);
       if (found.length) {
         const error2 = found.some((p) => p.startsWith("Loki")) ? "One of the /regular expressions/ is not valid for Loki. Loki uses RE2, so lookaround and backreferences do not work." : "One of the /regular expressions/ is not valid.";
-        return { query, parsed, error: error2, tree: null, logql: NO_LOGQL, filter: null };
+        return { query, parsed, error: error2, tree: null, logql: NO_LOGQL, filter: null, riskyRegex: false };
       }
       const tree = activeTree(parsed.root);
       const logql = compileTree(tree);
       const error = logql.tooMany ? `This filter expands into ${logql.count} OR branches. Use comma lists such as level:error,warn to stay under ${maxBranches}.` : null;
-      return { query, parsed, error, tree, logql, filter: tree ? toFilter(tree) : null };
+      return { query, parsed, error, tree, logql, filter: tree ? toFilter(tree) : null, riskyRegex: !!tree && hasRiskyRegex(tree) };
     },
     validate(query) {
       const parsed = parseQuery(query);
@@ -1191,7 +1319,7 @@ function createEngine(options = {}) {
         if (n.type === "group") return n.children.forEach(walk);
         if (n.field !== schema.lineField) return;
         if (n.op === "contains") sources.push(reEsc(valOf(n)));
-        else if (n.op === "regex") sources.push(toJsRegex(valOf(n), false, false).source);
+        else if (n.op === "regex" && !isRiskyRegex(valOf(n))) sources.push(toJsRegex(valOf(n), false, false).source);
       };
       if (tree) walk(tree);
       if (!sources.length) return null;
@@ -1219,6 +1347,7 @@ export {
   chipText,
   createEngine,
   defaultSchema,
+  isRiskyRegex,
   listOf,
   logqlString,
   quoteValue,

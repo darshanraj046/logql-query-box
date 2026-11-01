@@ -1,6 +1,6 @@
 {
   "name": "logql-query-box",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A React query box for Grafana Loki: a friendly search language that compiles to LogQL, with suggestions, chips, validation and a headless engine.",
   "license": "MIT",
   "author": "Darshan R",
@@ -10,25 +10,53 @@
   },
   "homepage": "https://github.com/darshanraj046/logql-query-box#readme",
   "bugs": "https://github.com/darshanraj046/logql-query-box/issues",
-  "keywords": ["logql", "loki", "grafana", "react", "query-builder", "log-search", "logs", "search-box"],
+  "keywords": [
+    "logql",
+    "loki",
+    "grafana",
+    "react",
+    "query-builder",
+    "log-search",
+    "logs",
+    "search-box"
+  ],
   "type": "module",
-  "sideEffects": ["**/*.css"],
+  "sideEffects": [
+    "**/*.css"
+  ],
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "import": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
-      "require": { "types": "./dist/index.d.cts", "default": "./dist/index.cjs" }
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
     },
     "./core": {
-      "import": { "types": "./dist/core.d.ts", "default": "./dist/core.js" },
-      "require": { "types": "./dist/core.d.cts", "default": "./dist/core.cjs" }
+      "import": {
+        "types": "./dist/core.d.ts",
+        "default": "./dist/core.js"
+      },
+      "require": {
+        "types": "./dist/core.d.cts",
+        "default": "./dist/core.cjs"
+      }
     },
     "./styles.css": "./dist/styles.css",
     "./package.json": "./package.json"
   },
-  "files": ["dist", "README.md", "LICENSE", "CHANGELOG.md"],
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
   "scripts": {
     "build": "tsup",
     "typecheck": "tsc --noEmit",

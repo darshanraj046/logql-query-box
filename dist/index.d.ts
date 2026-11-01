@@ -99,6 +99,7 @@ interface Analysis {
     tree: QueryNode | null;
     logql: CompileResult;
     filter: ApiFilter | null;
+    riskyRegex: boolean;
 }
 interface SavedQuery {
     id?: string;
@@ -160,6 +161,28 @@ interface Engine {
 }
 declare function createEngine(options?: EngineOptions): Engine;
 
+declare const MAX_BRANCHES = 12;
+declare function logqlString(s: string): string;
+
+declare const MAX_DEPTH = 100;
+
+declare const UNSUPPORTED_REGEX = "Loki uses RE2, which does not support lookaround or backreferences.";
+declare const INVALID_REGEX = "This is not a valid regular expression.";
+declare function regexProblem(p: string): string | null;
+declare function isRiskyRegex(p: string): boolean;
+declare function toJsRegex(p: string, ci: boolean, anchored: boolean): RegExp;
+declare function reEsc(s: string): string;
+
+declare function chipText(n: QueryNode, schema: ResolvedSchema): string;
+declare function chipLabel(text: string): string;
+
+declare function quoteValue(v: string): string;
+
+declare function tokenize(src: string, schema: ResolvedSchema): TokenizeResult;
+
+declare function listOf(c: Cond): string[];
+declare function valOf(c: Cond): string;
+
 interface Labels {
     placeholder: string;
     ariaLabel: string;
@@ -187,6 +210,8 @@ interface Labels {
     fixFilter: string;
     filterChanged: string;
     removeFilter: (text: string) => string;
+    moreFilters: (count: number) => string;
+    suggestionCount: (count: number) => string;
     savedAndRecent: string;
 }
 declare const defaultLabels: Labels;
@@ -243,26 +268,5 @@ interface LogQLQueryBoxProps {
 }
 declare const LogQLQueryBox: react.ForwardRefExoticComponent<LogQLQueryBoxProps & react.RefAttributes<LogQLQueryBoxHandle>>;
 
-declare const MAX_BRANCHES = 12;
-declare function logqlString(s: string): string;
-
-declare const MAX_DEPTH = 100;
-
-declare const UNSUPPORTED_REGEX = "Loki uses RE2, which does not support lookaround or backreferences.";
-declare const INVALID_REGEX = "This is not a valid regular expression.";
-declare function regexProblem(p: string): string | null;
-declare function toJsRegex(p: string, ci: boolean, anchored: boolean): RegExp;
-declare function reEsc(s: string): string;
-
-declare function chipText(n: QueryNode, schema: ResolvedSchema): string;
-declare function chipLabel(text: string): string;
-
-declare function quoteValue(v: string): string;
-
-declare function tokenize(src: string, schema: ResolvedSchema): TokenizeResult;
-
-declare function listOf(c: Cond): string[];
-declare function valOf(c: Cond): string;
-
-export { INVALID_REGEX, LogQLQueryBox, MAX_BRANCHES, MAX_DEPTH, UNSUPPORTED_REGEX, chipLabel, chipText, createEngine, defaultExamples, defaultLabels, defaultNotes, defaultSchema, defaultSyntax, listOf, logqlString, quoteValue, reEsc, regexProblem, resolveSchema, toJsRegex, tokenize, valOf };
+export { INVALID_REGEX, LogQLQueryBox, MAX_BRANCHES, MAX_DEPTH, UNSUPPORTED_REGEX, chipLabel, chipText, createEngine, defaultExamples, defaultLabels, defaultNotes, defaultSchema, defaultSyntax, isRiskyRegex, listOf, logqlString, quoteValue, reEsc, regexProblem, resolveSchema, toJsRegex, tokenize, valOf };
 export type { Analysis, ApiFilter, CompileResult, Cond, Engine, EngineOptions, FieldDef, FieldValue, FieldValues, Group, Labels, LogQLQueryBoxHandle, LogQLQueryBoxProps, LogRecord, Op, ParseResult, QueryNode, ResolvedField, ResolvedSchema, SavedQuery, Schema, Span, SuggestExtras, Suggestion, SuggestionList, Token, ValuePart };

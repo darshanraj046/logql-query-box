@@ -2,10 +2,10 @@ import { chipText } from './chips'
 import { compile, MAX_BRANCHES } from './compile'
 import { activeValues, appendTerm, clearField, editSpans, facetEdit, termText } from './edit'
 import { parse } from './parse'
-import { reEsc, toJsRegex } from './regex'
+import { isRiskyRegex, reEsc, toJsRegex } from './regex'
 import { defaultSchema, resolveSchema, type ResolvedSchema, type Schema } from './schema'
 import { suggest, tokenAtCaret, type KnownValues } from './suggest'
-import { activeTree, evaluate, isNegative, problems, toFilter, valOf } from './tree'
+import { activeTree, evaluate, hasRiskyRegex, isNegative, problems, toFilter, valOf } from './tree'
 import type { Analysis, CompileResult, FieldValues, LogRecord, ParseResult, QueryNode, Span, SuggestExtras, SuggestionList } from './types'
 
 export interface EngineOptions {
@@ -73,20 +73,20 @@ export function createEngine(options: EngineOptions = {}): Engine {
     isNegative,
     analyze(query) {
       const parsed = parseQuery(query)
-      if (parsed.error) return { query, parsed, error: parsed.error, tree: null, logql: NO_LOGQL, filter: null }
+      if (parsed.error) return { query, parsed, error: parsed.error, tree: null, logql: NO_LOGQL, filter: null, riskyRegex: false }
       const found = problems(parsed.root as QueryNode)
       if (found.length) {
         const error = found.some((p) => p.startsWith('Loki'))
           ? 'One of the /regular expressions/ is not valid for Loki. Loki uses RE2, so lookaround and backreferences do not work.'
           : 'One of the /regular expressions/ is not valid.'
-        return { query, parsed, error, tree: null, logql: NO_LOGQL, filter: null }
+        return { query, parsed, error, tree: null, logql: NO_LOGQL, filter: null, riskyRegex: false }
       }
       const tree = activeTree(parsed.root as QueryNode)
       const logql = compileTree(tree)
       const error = logql.tooMany
         ? `This filter expands into ${logql.count} OR branches. Use comma lists such as level:error,warn to stay under ${maxBranches}.`
         : null
-      return { query, parsed, error, tree, logql, filter: tree ? toFilter(tree) : null }
+      return { query, parsed, error, tree, logql, filter: tree ? toFilter(tree) : null, riskyRegex: !!tree && hasRiskyRegex(tree) }
     },
     validate(query) {
       const parsed = parseQuery(query)
@@ -100,7 +100,7 @@ export function createEngine(options: EngineOptions = {}): Engine {
         if (n.type === 'group') return n.children.forEach(walk)
         if (n.field !== schema.lineField) return
         if (n.op === 'contains') sources.push(reEsc(valOf(n)))
-        else if (n.op === 'regex') sources.push(toJsRegex(valOf(n), false, false).source)
+        else if (n.op === 'regex' && !isRiskyRegex(valOf(n))) sources.push(toJsRegex(valOf(n), false, false).source)
       }
       if (tree) walk(tree)
       if (!sources.length) return null

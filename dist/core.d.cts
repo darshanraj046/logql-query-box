@@ -96,6 +96,7 @@ interface Analysis {
     tree: QueryNode | null;
     logql: CompileResult;
     filter: ApiFilter | null;
+    riskyRegex: boolean;
 }
 interface SavedQuery {
     id?: string;
@@ -165,6 +166,7 @@ declare const MAX_DEPTH = 100;
 declare const UNSUPPORTED_REGEX = "Loki uses RE2, which does not support lookaround or backreferences.";
 declare const INVALID_REGEX = "This is not a valid regular expression.";
 declare function regexProblem(p: string): string | null;
+declare function isRiskyRegex(p: string): boolean;
 declare function toJsRegex(p: string, ci: boolean, anchored: boolean): RegExp;
 declare function reEsc(s: string): string;
 
@@ -178,5 +180,5 @@ declare function tokenize(src: string, schema: ResolvedSchema): TokenizeResult;
 declare function listOf(c: Cond): string[];
 declare function valOf(c: Cond): string;
 
-export { INVALID_REGEX, MAX_BRANCHES, MAX_DEPTH, UNSUPPORTED_REGEX, chipLabel, chipText, createEngine, defaultSchema, listOf, logqlString, quoteValue, reEsc, regexProblem, resolveSchema, toJsRegex, tokenize, valOf };
+export { INVALID_REGEX, MAX_BRANCHES, MAX_DEPTH, UNSUPPORTED_REGEX, chipLabel, chipText, createEngine, defaultSchema, isRiskyRegex, listOf, logqlString, quoteValue, reEsc, regexProblem, resolveSchema, toJsRegex, tokenize, valOf };
 export type { Analysis, ApiFilter, CompileResult, Cond, Engine, EngineOptions, FieldDef, FieldValue, FieldValues, Group, LogRecord, Op, ParseResult, QueryNode, ResolvedField, ResolvedSchema, SavedQuery, Schema, Span, SuggestExtras, Suggestion, SuggestionList, Token, ValuePart };

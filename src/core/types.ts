@@ -78,6 +78,7 @@ export interface Analysis {
   tree: QueryNode | null
   logql: CompileResult
   filter: ApiFilter | null
+  riskyRegex: boolean
 }
 
 export interface SavedQuery {

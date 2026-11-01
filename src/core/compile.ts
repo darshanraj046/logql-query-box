@@ -17,7 +17,18 @@ function dnf(n: QueryNode): Cond[][] {
   if (n.type === 'cond') return [[n]]
   const parts = n.children.map(dnf)
   if (n.op === 'OR') return parts.flat()
-  return parts.reduce<Cond[][]>((acc, p) => acc.flatMap((a) => p.map((b) => a.concat(b))), [[]])
+  const total = parts.reduce((product, p) => product * p.length, 1)
+  const out: Cond[][] = []
+  for (let k = 0; k < total; k++) {
+    const branch: Cond[] = []
+    let stride = total
+    for (const p of parts) {
+      stride /= p.length
+      for (const c of p[Math.floor(k / stride) % p.length]) branch.push(c)
+    }
+    out.push(branch)
+  }
+  return out
 }
 
 export function logqlString(s: string): string {

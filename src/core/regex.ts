@@ -19,12 +19,32 @@ const POSIX: Record<string, number[][]> = {
 }
 const SIMPLE_ESCAPE: Record<string, number> = { a: 7, f: 12, n: 10, r: 13, t: 9, v: 11 }
 const CACHE_LIMIT = 500
+const LOOP_LIMIT = 4
+const LONG_REPEAT = 10
+const WIDE_REPEAT_LIMIT = 4
+const OVERLAP_SAMPLE = [...Array.from({ length: 118 }, (_, i) => String.fromCharCode(i + 9)), '\u00e9', '\u4e2d', '\ud83d\ude00']
+const RISK_ATOM = /\\u\{[0-9a-f]+\}|\\[pP]\{[^}]*\}|\\.|\[(?:\\.|[^\]\\])*\]|[\s\S]/uy
+const RISK_REPEAT = /(?:\*|\+|\?|\{(\d+)(?:(,)(\d*))?\})\??/y
+const LITERAL_ATOM = /^(?:\\u\{[0-9a-f]+\}|[^\\.[\]])$/u
+const WIDE_ATOM = /^(?:\.|\[\^|\\[DSWP])/
+const ZERO_WIDTH_ATOM = /^(?:\^|\$|\\[bB])$/
 
 interface Translated {
   source: string
   flags: string
   problem: string | null
   caseSensitive: boolean
+  risky: boolean
+}
+
+interface RiskFrame {
+  varying: boolean
+  firsts: string[]
+  first: string | null
+  required: boolean
+  nullable: boolean
+  entry: string[]
+  exits: string[]
 }
 
 type Escaped = { cp: number; next: number } | { problem: string }
@@ -162,12 +182,97 @@ function readClass(p: string, start: number): { js: string; next: number } | { p
   return { js: `${out}]`, next: i + 1 }
 }
 
+function sharesCharacters(a: string, b: string): boolean {
+  if (!a || !b || a === b) return true
+  try {
+    const left = new RegExp(`^(?:${a})$`, 'iu')
+    const right = new RegExp(`^(?:${b})$`, 'iu')
+    return OVERLAP_SAMPLE.some((ch) => left.test(ch) && right.test(ch))
+  } catch {
+    return true
+  }
+}
+
+function isRisky(source: string): boolean {
+  let pending: string[] = []
+  const frame = (): RiskFrame => ({ varying: false, firsts: [], first: null, required: false, nullable: false, entry: pending, exits: [] })
+  const stack: RiskFrame[] = [frame()]
+  let wide = 0
+  let i = 0
+  while (i < source.length) {
+    const c = source[i]
+    if (c === '(') {
+      i += source[i + 1] === '?' ? 3 : 1
+      stack.push(frame())
+      continue
+    }
+    if (c === '|') {
+      const top = stack[stack.length - 1]
+      top.firsts.push(top.first ?? '')
+      top.first = null
+      if (!top.required) top.nullable = true
+      top.required = false
+      top.exits.push(...pending)
+      pending = top.entry
+      wide = 0
+      i++
+      continue
+    }
+    let atom = ''
+    let group: RiskFrame | undefined
+    if (c === ')') {
+      group = stack.pop()
+      i++
+    } else {
+      RISK_ATOM.lastIndex = i
+      atom = (RISK_ATOM.exec(source) as RegExpExecArray)[0]
+      i += atom.length
+    }
+    RISK_REPEAT.lastIndex = i
+    const q = RISK_REPEAT.exec(source)
+    let min = 1
+    let max = 1
+    if (q) {
+      i += q[0].length
+      const head = q[0][0]
+      min = head === '+' || head === '{' ? Number(q[1] ?? 1) : 0
+      max = head === '?' ? 1 : head !== '{' ? Infinity : q[2] ? (q[3] ? Number(q[3]) : Infinity) : min
+    }
+    const parent = stack[stack.length - 1]
+    let repeated = atom
+    if (group) {
+      const branches = [...group.firsts, group.first ?? '']
+      repeated = branches.length === 1 ? branches[0] : ''
+      const exits = [...group.exits, ...pending]
+      pending = max >= LONG_REPEAT ? group.entry : min === 0 ? [...group.entry, ...exits] : exits
+      const overlap = branches.length > 1 && (branches.includes('') || new Set(branches).size < branches.length)
+      const nullable = group.nullable || !group.required
+      if (max >= LOOP_LIMIT && (group.varying || overlap)) return true
+      if (max > 1 && group.varying && nullable) return true
+      if (group.varying) parent.varying = true
+      if (min > 0 && !nullable) parent.required = true
+    } else if (min > 0) {
+      parent.required = true
+    }
+    if (min !== max) parent.varying = true
+    if (parent.first === null) parent.first = !group && min > 0 && LITERAL_ATOM.test(atom) ? atom.toLowerCase() : ''
+    if (max >= LONG_REPEAT) {
+      if (pending.some((earlier) => sharesCharacters(earlier, repeated))) return true
+      if (WIDE_ATOM.test(atom) && ++wide >= WIDE_REPEAT_LIMIT) return true
+      pending = min > 0 ? [repeated] : [...pending, repeated]
+    } else if (!group && min > 0 && !ZERO_WIDTH_ATOM.test(atom)) {
+      pending = pending.filter((earlier) => !WIDE_ATOM.test(earlier) && sharesCharacters(earlier, atom))
+    }
+  }
+  return false
+}
+
 function translate(p: string): Translated {
   let out = ''
   let flags = 'u'
   let i = 0
   let caseSensitive = false
-  const stop = (problem: string): Translated => ({ source: '', flags: '', problem, caseSensitive })
+  const stop = (problem: string): Translated => ({ source: '', flags: '', problem, caseSensitive, risky: false })
   while (i < p.length) {
     const c = p[i]
     if (c === '\\') {
@@ -281,7 +386,7 @@ function translate(p: string): Translated {
   } catch {
     return stop(INVALID_REGEX)
   }
-  return { source: out, flags, problem: null, caseSensitive }
+  return { source: out, flags, problem: null, caseSensitive, risky: isRisky(out) }
 }
 
 const cache = new Map<string, Translated>()
@@ -298,6 +403,10 @@ function translated(p: string): Translated {
 
 export function regexProblem(p: string): string | null {
   return translated(p).problem
+}
+
+export function isRiskyRegex(p: string): boolean {
+  return translated(p).risky
 }
 
 export function toJsRegex(p: string, ci: boolean, anchored: boolean): RegExp {
