@@ -245,6 +245,7 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
     values,
     matchCase,
     maxBranches,
+    baseSelector,
     saved,
     recent,
     recentStorageKey = "logql-query-box.recent",
@@ -270,7 +271,8 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
     style
   } = props;
   const labels = (0, import_react2.useMemo)(() => ({ ...defaultLabels, ...props.labels }), [props.labels]);
-  const engine = (0, import_react2.useMemo)(() => props.engine ?? (0, import_core.createEngine)({ schema, values, matchCase, maxBranches }), [props.engine, schema, values, matchCase, maxBranches]);
+  const baseKey = JSON.stringify(baseSelector);
+  const engine = (0, import_react2.useMemo)(() => props.engine ?? (0, import_core.createEngine)({ schema, values, matchCase, maxBranches, baseSelector }), [props.engine, schema, values, matchCase, maxBranches, baseKey]);
   const controlled = value !== void 0;
   const [inner, setInner] = (0, import_react2.useState)(defaultValue);
   const query = controlled ? value : inner;

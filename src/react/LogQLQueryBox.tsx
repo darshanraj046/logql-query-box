@@ -44,6 +44,7 @@ export interface LogQLQueryBoxProps {
   values?: FieldValues
   matchCase?: boolean
   maxBranches?: number
+  baseSelector?: Record<string, string>
   saved?: SavedQuery[]
   recent?: string[]
   recentStorageKey?: string | null
@@ -119,6 +120,7 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
     values,
     matchCase,
     maxBranches,
+    baseSelector,
     saved,
     recent,
     recentStorageKey = 'logql-query-box.recent',
@@ -144,7 +146,8 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
     style
   } = props
   const labels = useMemo(() => ({ ...defaultLabels, ...props.labels }), [props.labels])
-  const engine = useMemo(() => props.engine ?? createEngine({ schema, values, matchCase, maxBranches }), [props.engine, schema, values, matchCase, maxBranches])
+  const baseKey = JSON.stringify(baseSelector)
+  const engine = useMemo(() => props.engine ?? createEngine({ schema, values, matchCase, maxBranches, baseSelector }), [props.engine, schema, values, matchCase, maxBranches, baseKey])
 
   const controlled = value !== undefined
   const [inner, setInner] = useState(defaultValue)

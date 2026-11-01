@@ -48,12 +48,17 @@ export function tidy(q: string, schema: ResolvedSchema): string {
 }
 
 export function editSpans(q: string, spans: Span[], text: string, schema: ResolvedSchema): string {
-  const first = spans.reduce((lowest, s) => Math.min(lowest, s[0]), Infinity)
-  let out = q
-  for (const s of spans.slice().sort((a, b) => b[0] - a[0])) {
-    out = out.slice(0, s[0]) + (s[0] === first ? text : ' ') + out.slice(s[1])
-  }
-  return tidy(out, schema)
+  const pieces: string[] = []
+  let at = 0
+  spans
+    .slice()
+    .sort((a, b) => a[0] - b[0])
+    .forEach(([start, end], i) => {
+      pieces.push(q.slice(at, start), i === 0 ? text : ' ')
+      at = end
+    })
+  pieces.push(q.slice(at))
+  return tidy(pieces.join(''), schema)
 }
 
 export function appendTerm(q: string, text: string, schema: ResolvedSchema): string {

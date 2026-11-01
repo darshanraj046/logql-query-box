@@ -12,10 +12,13 @@ export interface FieldDef {
   example?: string | ((values: string[]) => string)
 }
 
+export type LogParser = 'json' | 'logfmt'
+
 export interface Schema {
   fields: Record<string, FieldDef>
   selectorField?: string
   excludeExample?: string
+  parser?: LogParser
 }
 
 export interface ResolvedField extends Omit<FieldDef, 'synonyms'> {
@@ -31,6 +34,8 @@ export interface ResolvedSchema {
   lineField: string
   selectorField: string
   excludeExample: string
+  parser?: LogParser
+  baseSelector: [string, string][]
 }
 
 const LABEL_NAME = /^[a-zA-Z_][a-zA-Z0-9_]*$/
@@ -86,7 +91,7 @@ export const defaultSchema: Schema = {
   excludeExample: 'level:debug'
 }
 
-export function resolveSchema(schema: Schema): ResolvedSchema {
+export function resolveSchema(schema: Schema, baseSelector: Record<string, string> = {}): ResolvedSchema {
   const fields = new Map<string, ResolvedField>()
   const alias = new Map<string, string>()
   let lineField = ''
@@ -119,9 +124,13 @@ export function resolveSchema(schema: Schema): ResolvedSchema {
   }
 
   if (!lineField) throw new Error('logql-query-box: a schema needs one field with kind "line".')
-  const selectorField = schema.selectorField ?? firstIndexed
-  if (!selectorField || !fields.get(selectorField)?.indexed) {
-    throw new Error('logql-query-box: a schema needs an indexed label to use as the fallback stream selector.')
+  const base = Object.entries(baseSelector)
+  for (const [name] of base) {
+    if (!LABEL_NAME.test(name)) throw new Error(`logql-query-box: "${name}" is not a valid Loki label name.`)
+  }
+  const selectorField = schema.selectorField ?? base[0]?.[0] ?? firstIndexed
+  if (!fields.get(selectorField)?.indexed && !base.some(([name]) => name === selectorField)) {
+    throw new Error('logql-query-box: a schema needs an indexed label or a baseSelector to use as the stream selector.')
   }
   const firstLabel = [...fields.values()].find((f) => f.kind === 'label')
   return {
@@ -129,6 +138,8 @@ export function resolveSchema(schema: Schema): ResolvedSchema {
     alias,
     lineField,
     selectorField,
-    excludeExample: schema.excludeExample ?? `${firstLabel ? firstLabel.primary : 'field'}:value`
+    excludeExample: schema.excludeExample ?? `${firstLabel ? firstLabel.primary : 'field'}:value`,
+    parser: schema.parser,
+    baseSelector: base
   }
 }

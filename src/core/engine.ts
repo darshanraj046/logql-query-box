@@ -13,6 +13,7 @@ export interface EngineOptions {
   values?: FieldValues
   matchCase?: boolean
   maxBranches?: number
+  baseSelector?: Record<string, string>
 }
 
 export interface Engine {
@@ -51,7 +52,7 @@ function indexValues(values: FieldValues = {}): KnownValues {
 }
 
 export function createEngine(options: EngineOptions = {}): Engine {
-  const schema = resolveSchema(options.schema ?? defaultSchema)
+  const schema = resolveSchema(options.schema ?? defaultSchema, options.baseSelector)
   const known = indexValues(options.values)
   const matchCase = !!options.matchCase
   const maxBranches = options.maxBranches ?? MAX_BRANCHES

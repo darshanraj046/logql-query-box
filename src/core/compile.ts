@@ -130,11 +130,15 @@ function canAnchorStream(c: Cond): boolean {
   }
 }
 
+function baseMatchers(schema: ResolvedSchema): string[] {
+  return schema.baseSelector.filter(([, value]) => value !== '').map(([name, value]) => `${name}=${logqlString(value)}`)
+}
+
 function compileBranch(conds: Cond[], schema: ResolvedSchema, matchCase: boolean): string {
-  const sel: string[] = []
+  const sel = baseMatchers(schema)
   const lines: string[] = []
   const labs: string[] = []
-  let strong = false
+  let strong = sel.length > 0
   for (const c of conds) {
     if (c.field === schema.lineField) lines.push(lineFilter(c, matchCase))
     else if (schema.fields.get(c.field)?.indexed) {
@@ -143,14 +147,12 @@ function compileBranch(conds: Cond[], schema: ResolvedSchema, matchCase: boolean
     } else labs.push(`| ${pipelineMatcher(c)}`)
   }
   if (!strong) sel.push(`${schema.selectorField}=~".+"`)
-  return `{${sel.join(', ')}}${lines
-    .concat(labs)
-    .map((s) => `\n  ${s}`)
-    .join('')}`
+  const parser = labs.length && schema.parser ? [`| ${schema.parser} | __error__=""`] : []
+  return `{${sel.join(', ')}}${[...lines, ...parser, ...labs].map((s) => `\n  ${s}`).join('')}`
 }
 
 export function compile(tree: QueryNode | null, schema: ResolvedSchema, matchCase: boolean, maxBranches: number): CompileResult {
-  if (!tree) return { branches: [`{${schema.selectorField}=~".+"}`], tooMany: false, count: 1 }
+  if (!tree) return { branches: [compileBranch([], schema, matchCase)], tooMany: false, count: 1 }
   const count = countBranches(tree)
   if (count > maxBranches) return { tooMany: true, count: Math.min(count, Number.MAX_SAFE_INTEGER), branches: [] }
   const branches = [...new Set(dnf(tree).map((b) => compileBranch(b, schema, matchCase)))]

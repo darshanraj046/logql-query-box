@@ -14,10 +14,12 @@ interface FieldDef {
     excludeHint?: string;
     example?: string | ((values: string[]) => string);
 }
+type LogParser = 'json' | 'logfmt';
 interface Schema {
     fields: Record<string, FieldDef>;
     selectorField?: string;
     excludeExample?: string;
+    parser?: LogParser;
 }
 interface ResolvedField extends Omit<FieldDef, 'synonyms'> {
     name: string;
@@ -31,9 +33,11 @@ interface ResolvedSchema {
     lineField: string;
     selectorField: string;
     excludeExample: string;
+    parser?: LogParser;
+    baseSelector: [string, string][];
 }
 declare const defaultSchema: Schema;
-declare function resolveSchema(schema: Schema): ResolvedSchema;
+declare function resolveSchema(schema: Schema, baseSelector?: Record<string, string>): ResolvedSchema;
 
 type Op = 'contains' | 'not_contains' | 'eq' | 'neq' | 'starts' | 'ends' | 'regex' | 'not_regex' | 'in' | 'not_in';
 type Span = [number, number];
@@ -139,6 +143,7 @@ interface EngineOptions {
     values?: FieldValues;
     matchCase?: boolean;
     maxBranches?: number;
+    baseSelector?: Record<string, string>;
 }
 interface Engine {
     schema: ResolvedSchema;
@@ -241,6 +246,7 @@ interface LogQLQueryBoxProps {
     values?: FieldValues;
     matchCase?: boolean;
     maxBranches?: number;
+    baseSelector?: Record<string, string>;
     saved?: SavedQuery[];
     recent?: string[];
     recentStorageKey?: string | null;
@@ -269,4 +275,4 @@ interface LogQLQueryBoxProps {
 declare const LogQLQueryBox: react.ForwardRefExoticComponent<LogQLQueryBoxProps & react.RefAttributes<LogQLQueryBoxHandle>>;
 
 export { INVALID_REGEX, LogQLQueryBox, MAX_BRANCHES, MAX_DEPTH, UNSUPPORTED_REGEX, chipLabel, chipText, createEngine, defaultExamples, defaultLabels, defaultNotes, defaultSchema, defaultSyntax, isRiskyRegex, listOf, logqlString, quoteValue, reEsc, regexProblem, resolveSchema, toJsRegex, tokenize, valOf };
-export type { Analysis, ApiFilter, CompileResult, Cond, Engine, EngineOptions, FieldDef, FieldValue, FieldValues, Group, Labels, LogQLQueryBoxHandle, LogQLQueryBoxProps, LogRecord, Op, ParseResult, QueryNode, ResolvedField, ResolvedSchema, SavedQuery, Schema, Span, SuggestExtras, Suggestion, SuggestionList, Token, ValuePart };
+export type { Analysis, ApiFilter, CompileResult, Cond, Engine, EngineOptions, FieldDef, FieldValue, FieldValues, Group, Labels, LogParser, LogQLQueryBoxHandle, LogQLQueryBoxProps, LogRecord, Op, ParseResult, QueryNode, ResolvedField, ResolvedSchema, SavedQuery, Schema, Span, SuggestExtras, Suggestion, SuggestionList, Token, ValuePart };

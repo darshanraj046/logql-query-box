@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.0
+
+Added:
+
+- `parser` on the schema: `'json'` or `'logfmt'`. It adds `| json | __error__=""` before field filters, only on queries that need it.
+- `baseSelector` on `createEngine` and `LogQLQueryBox`: stream labels added to every query, such as `{ index: 'payments' }`. A schema no longer needs an indexed field when this is set.
+
+Fixed:
+
+- Removing a chip or clearing a field on a query with 120,000 terms took about 11 seconds. It now runs in linear time.
+
 ## 0.1.1
 
 Fixed:

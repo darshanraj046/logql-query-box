@@ -36,7 +36,7 @@ Works with `yarn add` and `pnpm add` too. React 18 or newer is required.
 To install directly from GitHub instead, pin a tag. The built files are committed, so there is no build step.
 
 ```bash
-npm install github:darshanraj046/logql-query-box#v0.1.1
+npm install github:darshanraj046/logql-query-box#v0.2.0
 ```
 
 ## Quick start
@@ -119,9 +119,10 @@ Half typed input stays valid, so `a OR` or `level:` never shows an error while s
 | `onSave` | `(query, existing?) => void` | | Shows a save button. `existing` is set if this query is already saved. |
 | `values` | `FieldValues` | | Known values per field, plain strings or `{ value, count }`. Can change at any time. |
 | `schema` | `Schema` | Loki defaults | Fields and aliases. See below. |
-| `engine` | `Engine` | | A ready engine. Replaces `schema`, `values`, `matchCase` and `maxBranches`. |
+| `engine` | `Engine` | | A ready engine. Replaces `schema`, `values`, `matchCase`, `maxBranches` and `baseSelector`. |
 | `matchCase` | `boolean` | `false` | Case sensitive line matching. |
 | `maxBranches` | `number` | `12` | Limit on OR expansion. |
+| `baseSelector` | `Record<string, string>` | | Stream labels added to every query, such as `{ index: 'payments' }`. Can change at any time. |
 | `saved` | `SavedQuery[]` | | Shown in suggestions. |
 | `recent` | `string[]` | | Recent queries. When set, you own the list. |
 | `recentStorageKey` | `string \| null` | `'logql-query-box.recent'` | `localStorage` key. `null` turns storage off. |
@@ -189,10 +190,42 @@ const schema = {
 - `indexed: false` means structured metadata or an extracted label, which becomes a `| label="x"` filter.
 - Exactly one field needs `kind: 'line'`. Plain words search it.
 - The first alias is what the UI writes when it adds a term.
-- `selectorField` picks the label used for the fallback `=~".+"` selector. It defaults to the first indexed field.
+- `selectorField` picks the label used for the fallback `=~".+"` selector. It defaults to the first `baseSelector` label, then the first indexed field.
 - An invalid schema throws a clear error on first render.
 
 Other field options: `values` (a fixed list), `synonyms` (`{ prod: 'production' }`), `lowercase`, `color` (`'level'`, `'hash'`, `'accent'` or a function), `hint`, `excludeHint`, `example`.
+
+### Logs stored as JSON
+
+When logs are stored as JSON lines, their fields are not Loki labels until a parser runs, so a filter like `| logLevel="ERROR"` on its own finds nothing. Set `parser` on the schema, and use `baseSelector` for the stream labels every query must include.
+
+```tsx
+const schema = {
+  parser: 'json',
+  fields: {
+    logLevel: { label: 'Log Level', aliases: ['level'], values: ['ERROR', 'WARN', 'INFO', 'DEBUG'] },
+    serviceName: { label: 'App Name', aliases: ['app'] },
+    content: { label: 'Content', kind: 'line', aliases: ['msg'] }
+  }
+}
+
+<LogQLQueryBox schema={schema} baseSelector={{ index: 'payments' }} />
+```
+
+Now `level:error app:checkout-* timeout` compiles to:
+
+```logql
+{index="payments"}
+  |~ "(?i)timeout"
+  | json | __error__=""
+  | logLevel="ERROR"
+  | serviceName=~"^(?:checkout-.*)$"
+```
+
+- The parser stage is added only when a query filters on a field, and it comes after the line filters so Loki parses fewer lines. `parser: 'logfmt'` works the same way.
+- `baseSelector` labels are not fields, so they never appear in suggestions or chips. Values are escaped for you. While a value is empty, the query uses `label=~".+"`.
+- `baseSelector` is for building queries, not for access control. Anyone can change what a browser sends, so enforce access on your server.
+- Words are still searched on the raw line, so a word that is also a JSON key, such as `content`, matches every line.
 
 ## Without React
 
@@ -201,7 +234,7 @@ The engine runs anywhere, including a Node backend.
 ```ts
 import { createEngine } from 'logql-query-box/core'
 
-const engine = createEngine({ values: { service_name: ['checkout-api'] } })
+const engine = createEngine({ values: { service_name: ['checkout-api'] }, baseSelector: { index: 'payments' } })
 const result = engine.analyze('level:error timeout')
 
 result.error
@@ -271,7 +304,7 @@ npm run check
 | `test/invariants.test.ts` | Properties that must hold for any input, including garbage. |
 | `test/component.test.tsx` | The React component, with real keyboard and mouse events. |
 | `test/ssr.test.tsx` | Rendering with no browser globals. |
-| `test/e2e.loki.test.ts` | For random queries, real Loki returns exactly the rows `evaluate()` picks. |
+| `test/e2e.loki.test.ts` | For random queries, real Loki returns exactly the rows `evaluate()` picks, for label based logs and for JSON lines. |
 
 To run the Loki tests, start a local Loki and point the tests at it:
 

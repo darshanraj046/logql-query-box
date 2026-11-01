@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest'
+import { createEngine, defaultSchema, type Schema } from '../src/core'
 import { genBaselineQuery, genExtendedQuery, makeEngine, makeRecords, rng, type LogRow } from './helpers'
 
 const base = process.env.LOKI_URL ?? 'http://127.0.0.1:3199'
@@ -101,6 +102,91 @@ describe('compiled LogQL against a real Loki', () => {
       }
     })
     console.log(`${_name}: ${executed} of ${queries.length} queries executed, ${failures.length} failures`)
+    expect(failures.slice(0, 12).join('\n')).toBe('')
+    expect(executed).toBeGreaterThan(QUERIES / 3)
+  })
+})
+
+describe('JSON logs under one stream label against a real Loki', () => {
+  const index = 'e2e-json-logs'
+  const jsonStart = start - 3600000
+  const jsonStamp = (id: number) => (BigInt(jsonStart) * 1000000n + BigInt(id) * 1000000n).toString()
+  const stored = records.map((row) => {
+    const fields = { ts: jsonStart + row.id, ...(row.detected_level ? { logLevel: row.detected_level } : {}), serviceName: row.service_name, serviceCategory: row.service_category, content: row.line }
+    return { id: row.id, raw: JSON.stringify(fields), logLevel: row.detected_level, serviceName: row.service_name, serviceCategory: row.service_category }
+  })
+  const fromStamp = new Map(stored.map((row) => [jsonStamp(row.id), row.id]))
+  const schema: Schema = {
+    parser: 'json',
+    fields: {
+      logLevel: { ...defaultSchema.fields.detected_level, indexed: false },
+      serviceName: { ...defaultSchema.fields.service_name, indexed: false },
+      serviceCategory: { ...defaultSchema.fields.service_category, indexed: false },
+      content: { ...defaultSchema.fields.line, aliases: ['msg', 'message', 'line', 'text'] }
+    }
+  }
+  const engineFor = (matchCase: boolean) => createEngine({ schema, baseSelector: { index }, matchCase, values: { serviceName: [...new Set(records.map((r) => r.service_name))] } })
+
+  async function runJson(query: string): Promise<number[]> {
+    const u = new URL(`${base}/loki/api/v1/query_range`)
+    u.searchParams.set('query', query)
+    u.searchParams.set('start', jsonStamp(0))
+    u.searchParams.set('end', jsonStamp(records.length + 1))
+    u.searchParams.set('limit', '5000')
+    u.searchParams.set('direction', 'forward')
+    const r = await fetch(u)
+    const text = await r.text()
+    if (!r.ok) throw new Error(`Loki ${r.status} for ${JSON.stringify(query)}: ${text.slice(0, 200)}`)
+    const out: number[] = []
+    for (const s of JSON.parse(text).data.result) for (const [ts] of s.values) out.push(fromStamp.get(ts) as number)
+    return out
+  }
+
+  beforeAll(async () => {
+    await ready()
+    const body = { streams: [{ stream: { index }, values: stored.map((row) => [jsonStamp(row.id), row.raw]) }] }
+    const r = await fetch(`${base}/loki/api/v1/push`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+    if (!r.ok) throw new Error(`push failed: ${r.status} ${await r.text()}`)
+    for (let i = 0; i < 40; i++) {
+      if ((await runJson(`{index="${index}"}`)).length === stored.length) return
+      await new Promise((done) => setTimeout(done, 250))
+    }
+    throw new Error('records did not arrive')
+  })
+
+  it('needs the parser, without it a field filter finds nothing', async () => {
+    expect(await runJson(`{index="${index}"} | serviceName="checkout-api"`)).toEqual([])
+    const engine = engineFor(false)
+    expect((await runJson(engine.analyze('app:checkout-api').logql.branches[0])).length).toBeGreaterThan(0)
+  })
+
+  it.each([
+    ['case insensitive', false, 41],
+    ['match case', true, 42]
+  ] as const)('%s returns exactly the rows evaluate() picks on the stored lines', async (_name, matchCase, seed) => {
+    const engine = engineFor(matchCase)
+    const r = rng(seed)
+    const queries: string[] = []
+    while (queries.length < QUERIES) queries.push(genExtendedQuery(r))
+    const failures: string[] = []
+    let executed = 0
+    await pool(queries, 12, async (q) => {
+      const a = engine.analyze(q)
+      if (a.error) return
+      executed++
+      const expected = stored.filter((row) => engine.evaluate(a.tree, { logLevel: row.logLevel, serviceName: row.serviceName, serviceCategory: row.serviceCategory, content: row.raw })).map((row) => row.id).sort((x, y) => x - y)
+      try {
+        const got = new Set<number>()
+        for (const branch of a.logql.branches) {
+          if (!branch.startsWith(`{index="${index}"`)) throw new Error(`not scoped: ${branch}`)
+          for (const id of await runJson(branch)) got.add(id)
+        }
+        const actual = [...got].sort((x, y) => x - y)
+        if (JSON.stringify(actual) !== JSON.stringify(expected)) failures.push(`${JSON.stringify(q)} loki=${actual.length} local=${expected.length} logql=${JSON.stringify(a.logql.branches)}`)
+      } catch (e) {
+        failures.push(`${JSON.stringify(q)} ${(e as Error).message}`)
+      }
+    })
     expect(failures.slice(0, 12).join('\n')).toBe('')
     expect(executed).toBeGreaterThan(QUERIES / 3)
   })

@@ -224,6 +224,7 @@ var LogQLQueryBox = forwardRef(function LogQLQueryBox2(props, ref) {
     values,
     matchCase,
     maxBranches,
+    baseSelector,
     saved,
     recent,
     recentStorageKey = "logql-query-box.recent",
@@ -249,7 +250,8 @@ var LogQLQueryBox = forwardRef(function LogQLQueryBox2(props, ref) {
     style
   } = props;
   const labels = useMemo(() => ({ ...defaultLabels, ...props.labels }), [props.labels]);
-  const engine = useMemo(() => props.engine ?? createEngine({ schema, values, matchCase, maxBranches }), [props.engine, schema, values, matchCase, maxBranches]);
+  const baseKey = JSON.stringify(baseSelector);
+  const engine = useMemo(() => props.engine ?? createEngine({ schema, values, matchCase, maxBranches, baseSelector }), [props.engine, schema, values, matchCase, maxBranches, baseKey]);
   const controlled = value !== void 0;
   const [inner, setInner] = useState(defaultValue);
   const query = controlled ? value : inner;

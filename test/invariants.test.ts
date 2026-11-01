@@ -261,7 +261,9 @@ describe('performance', () => {
 
   it('edits a query with very many spans', () => {
     const q = Array.from({ length: 120000 }, (_, i) => `app:v${i}`).join(' ')
+    const t = performance.now()
     expect(engine.clearField(q, 'service_name')).toBe('')
+    expect(performance.now() - t).toBeLessThan(2500)
   })
 
   it('keeps the order of conditions when expanding branches', () => {

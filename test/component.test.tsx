@@ -1082,6 +1082,37 @@ describe('suggestion placement', () => {
   })
 })
 
+describe('baseSelector prop', () => {
+  const pre = () => document.querySelector('.lqb-logql pre')
+
+  it('scopes the LogQL panel and what onExecute receives', async () => {
+    const { user, onExecute } = setup({ baseSelector: { index: 'payments' }, defaultValue: 'timeout', defaultLogqlOpen: true })
+    expect(pre()).toHaveTextContent('{index="payments"}')
+    await user.click(execute())
+    expect(onExecute.mock.calls[0][0].logql.branches[0]).toContain('{index="payments"}')
+  })
+
+  it('updates when the index changes', () => {
+    const { rerender } = setup({ baseSelector: { index: 'one' }, defaultLogqlOpen: true })
+    expect(pre()).toHaveTextContent('{index="one"}')
+    rerender(<LogQLQueryBox baseSelector={{ index: 'two' }} defaultLogqlOpen recentStorageKey={null} />)
+    expect(pre()).toHaveTextContent('{index="two"}')
+  })
+
+  it('accepts a new object with the same value on every render', () => {
+    const { rerender } = setup({ baseSelector: { index: 'one' }, defaultValue: 'x', defaultLogqlOpen: true })
+    const first = pre()?.textContent
+    rerender(<LogQLQueryBox baseSelector={{ index: 'one' }} defaultValue="x" defaultLogqlOpen recentStorageKey={null} />)
+    expect(pre()?.textContent).toBe(first)
+  })
+
+  it('shows no index field in the suggestions', async () => {
+    const { user } = setup({ baseSelector: { index: 'payments' } })
+    await user.click(box())
+    expect(optionLabels()).not.toContain('index:')
+  })
+})
+
 describe('more than one box on a page', () => {
   it('keeps ids unique and state separate', async () => {
     const user = userEvent.setup()

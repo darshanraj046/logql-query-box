@@ -681,11 +681,14 @@ function canAnchorStream(c) {
       return false;
   }
 }
+function baseMatchers(schema) {
+  return schema.baseSelector.filter(([, value]) => value !== "").map(([name, value]) => `${name}=${logqlString(value)}`);
+}
 function compileBranch(conds, schema, matchCase) {
-  const sel = [];
+  const sel = baseMatchers(schema);
   const lines = [];
   const labs = [];
-  let strong = false;
+  let strong = sel.length > 0;
   for (const c of conds) {
     if (c.field === schema.lineField) lines.push(lineFilter(c, matchCase));
     else if (schema.fields.get(c.field)?.indexed) {
@@ -694,11 +697,12 @@ function compileBranch(conds, schema, matchCase) {
     } else labs.push(`| ${pipelineMatcher(c)}`);
   }
   if (!strong) sel.push(`${schema.selectorField}=~".+"`);
-  return `{${sel.join(", ")}}${lines.concat(labs).map((s) => `
+  const parser = labs.length && schema.parser ? [`| ${schema.parser} | __error__=""`] : [];
+  return `{${sel.join(", ")}}${[...lines, ...parser, ...labs].map((s) => `
   ${s}`).join("")}`;
 }
 function compile(tree, schema, matchCase, maxBranches) {
-  if (!tree) return { branches: [`{${schema.selectorField}=~".+"}`], tooMany: false, count: 1 };
+  if (!tree) return { branches: [compileBranch([], schema, matchCase)], tooMany: false, count: 1 };
   const count = countBranches(tree);
   if (count > maxBranches) return { tooMany: true, count: Math.min(count, Number.MAX_SAFE_INTEGER), branches: [] };
   const branches = [...new Set(dnf(tree).map((b) => compileBranch(b, schema, matchCase)))];
@@ -1053,12 +1057,14 @@ function tidy(q, schema) {
   return out;
 }
 function editSpans(q, spans, text, schema) {
-  const first = spans.reduce((lowest, s) => Math.min(lowest, s[0]), Infinity);
-  let out = q;
-  for (const s of spans.slice().sort((a, b) => b[0] - a[0])) {
-    out = out.slice(0, s[0]) + (s[0] === first ? text : " ") + out.slice(s[1]);
-  }
-  return tidy(out, schema);
+  const pieces = [];
+  let at = 0;
+  spans.slice().sort((a, b) => a[0] - b[0]).forEach(([start, end], i) => {
+    pieces.push(q.slice(at, start), i === 0 ? text : " ");
+    at = end;
+  });
+  pieces.push(q.slice(at));
+  return tidy(pieces.join(""), schema);
 }
 function appendTerm(q, text, schema) {
   const base = tidy(q, schema);
@@ -1150,7 +1156,7 @@ var defaultSchema = {
   selectorField: "service_name",
   excludeExample: "level:debug"
 };
-function resolveSchema(schema) {
+function resolveSchema(schema, baseSelector = {}) {
   const fields = /* @__PURE__ */ new Map();
   const alias = /* @__PURE__ */ new Map();
   let lineField = "";
@@ -1181,9 +1187,13 @@ function resolveSchema(schema) {
     });
   }
   if (!lineField) throw new Error('logql-query-box: a schema needs one field with kind "line".');
-  const selectorField = schema.selectorField ?? firstIndexed;
-  if (!selectorField || !fields.get(selectorField)?.indexed) {
-    throw new Error("logql-query-box: a schema needs an indexed label to use as the fallback stream selector.");
+  const base = Object.entries(baseSelector);
+  for (const [name] of base) {
+    if (!LABEL_NAME.test(name)) throw new Error(`logql-query-box: "${name}" is not a valid Loki label name.`);
+  }
+  const selectorField = schema.selectorField ?? base[0]?.[0] ?? firstIndexed;
+  if (!fields.get(selectorField)?.indexed && !base.some(([name]) => name === selectorField)) {
+    throw new Error("logql-query-box: a schema needs an indexed label or a baseSelector to use as the stream selector.");
   }
   const firstLabel = [...fields.values()].find((f) => f.kind === "label");
   return {
@@ -1191,7 +1201,9 @@ function resolveSchema(schema) {
     alias,
     lineField,
     selectorField,
-    excludeExample: schema.excludeExample ?? `${firstLabel ? firstLabel.primary : "field"}:value`
+    excludeExample: schema.excludeExample ?? `${firstLabel ? firstLabel.primary : "field"}:value`,
+    parser: schema.parser,
+    baseSelector: base
   };
 }
 
@@ -1319,7 +1331,7 @@ function indexValues(values = {}) {
   return known;
 }
 function createEngine(options = {}) {
-  const schema = resolveSchema(options.schema ?? defaultSchema);
+  const schema = resolveSchema(options.schema ?? defaultSchema, options.baseSelector);
   const known = indexValues(options.values);
   const matchCase = !!options.matchCase;
   const maxBranches = options.maxBranches ?? MAX_BRANCHES;

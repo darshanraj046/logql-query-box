@@ -437,6 +437,117 @@ describe('custom schema', () => {
   })
 })
 
+describe('baseSelector', () => {
+  const scoped = createEngine({ baseSelector: { index: 'payments' } })
+  const logql = (q: string) => scoped.analyze(q).logql.branches
+
+  it('scopes every query instead of using the fallback selector', () => {
+    expect(logql('')).toEqual(['{index="payments"}'])
+    expect(logql('timeout')).toEqual(['{index="payments"}\n  |~ "(?i)timeout"'])
+    expect(logql('level:error')).toEqual(['{index="payments"}\n  | detected_level="error"'])
+  })
+
+  it('combines with indexed fields and needs no fallback for exclusions', () => {
+    expect(logql('app:x')).toEqual(['{index="payments", service_name="x"}'])
+    expect(logql('-app:x')).toEqual(['{index="payments", service_name!="x"}'])
+    expect(logql('app:*')).toEqual(['{index="payments", service_name=~".*"}'])
+  })
+
+  it('applies to every OR branch', () => {
+    expect(logql('a OR b')).toEqual(['{index="payments"}\n  |~ "(?i)a"', '{index="payments"}\n  |~ "(?i)b"'])
+  })
+
+  it('accepts several labels in order', () => {
+    const e = createEngine({ baseSelector: { index: 'a', env: 'prod' } })
+    expect(e.analyze('').logql.branches).toEqual(['{index="a", env="prod"}'])
+  })
+
+  it('escapes values so a selector cannot be broken out of', () => {
+    const value = 'x"} | drop level {y="\\\n'
+    const e = createEngine({ baseSelector: { index: value } })
+    expect(e.analyze('').logql.branches).toEqual([`{index=${JSON.stringify(value)}}`])
+  })
+
+  it('falls back to a valid selector while the value is empty', () => {
+    const schema: Schema = { fields: { line: { label: 'Line', kind: 'line' } } }
+    expect(createEngine({ schema, baseSelector: { index: '' } }).analyze('').logql.branches).toEqual(['{index=~".+"}'])
+    expect(createEngine({ baseSelector: { index: '' } }).analyze('a').logql.branches[0]).toContain('{service_name=~".+"}')
+  })
+
+  it('removes the need for an indexed field in the schema', () => {
+    const schema: Schema = { fields: { app: { label: 'App' }, line: { label: 'Line', kind: 'line' } } }
+    expect(() => createEngine({ schema })).toThrow('needs an indexed label or a baseSelector')
+    expect(createEngine({ schema, baseSelector: { index: 'a' } }).analyze('').logql.branches).toEqual(['{index="a"}'])
+  })
+
+  it('rejects a bad label name', () => {
+    expect(() => createEngine({ baseSelector: { 'bad-label': 'a' } })).toThrow('not a valid Loki label name')
+  })
+
+  it('never appears in suggestions or chips', () => {
+    expect(scoped.suggest('', 0).items.map((i) => i.label)).not.toContain('index:')
+    expect(scoped.parse('level:error').children).toHaveLength(1)
+  })
+
+  it('leaves the default behaviour unchanged when absent', () => {
+    expect(createEngine().analyze('').logql.branches).toEqual(['{service_name=~".+"}'])
+  })
+})
+
+describe('schema parser', () => {
+  const schema: Schema = {
+    parser: 'json',
+    fields: {
+      logLevel: { label: 'Log Level', aliases: ['level'], values: ['ERROR', 'WARN', 'INFO'] },
+      serviceName: { label: 'App Name', aliases: ['app'] },
+      content: { label: 'Content', kind: 'line', aliases: ['msg'] }
+    }
+  }
+  const e = createEngine({ schema, baseSelector: { index: 'loki_21_july' } })
+  const logql = (q: string) => e.analyze(q).logql.branches
+
+  it('produces the query verified on real Loki for JSON logs', () => {
+    expect(logql('level:error app:checkout-* timeout -debug')).toEqual([
+      '{index="loki_21_july"}\n  |~ "(?i)timeout"\n  !~ "(?i)debug"\n  | json | __error__=""\n  | logLevel="ERROR"\n  | serviceName=~"^(?:checkout-.*)$"'
+    ])
+  })
+
+  it('skips the parser when nothing filters on a field', () => {
+    expect(logql('')).toEqual(['{index="loki_21_july"}'])
+    expect(logql('timeout -debug')).toEqual(['{index="loki_21_july"}\n  |~ "(?i)timeout"\n  !~ "(?i)debug"'])
+  })
+
+  it('adds the parser once, only to the branches that need it', () => {
+    expect(logql('timeout OR level:error')).toEqual(['{index="loki_21_july"}\n  |~ "(?i)timeout"', '{index="loki_21_july"}\n  | json | __error__=""\n  | logLevel="ERROR"'])
+    expect(logql('level:error app:a').join('').match(/\| json/g)).toHaveLength(1)
+  })
+
+  it('keeps line filters ahead of the parser', () => {
+    const q = logql('level:error timeout')[0]
+    expect(q.indexOf('|~')).toBeLessThan(q.indexOf('| json'))
+  })
+
+  it('supports logfmt', () => {
+    const logfmt = createEngine({ schema: { ...schema, parser: 'logfmt' }, baseSelector: { index: 'a' } })
+    expect(logfmt.analyze('level:error').logql.branches).toEqual(['{index="a"}\n  | logfmt | __error__=""\n  | logLevel="ERROR"'])
+  })
+
+  it('does not parse for indexed fields', () => {
+    const indexed = createEngine({ schema: { ...schema, fields: { ...schema.fields, serviceName: { label: 'App', aliases: ['app'], indexed: true } } } })
+    expect(indexed.analyze('app:a').logql.branches).toEqual(['{serviceName="a"}'])
+  })
+
+  it('folds lowercase input to the stored uppercase level', () => {
+    expect(logql('level:error,warn')[0]).toContain('| logLevel=~"ERROR|WARN"')
+  })
+
+  it('evaluates records the same way with or without a parser', () => {
+    const a = e.analyze('level:error timeout')
+    expect(e.evaluate(a.tree, { logLevel: 'ERROR', content: 'a timeout' })).toBe(true)
+    expect(e.evaluate(a.tree, { logLevel: 'INFO', content: 'a timeout' })).toBe(false)
+  })
+})
+
 describe('maxBranches option', () => {
   it('can be lowered', () => {
     const e = makeEngine({ maxBranches: 1 })
