@@ -27,13 +27,17 @@ becomes
 
 ## Install
 
-Install from GitHub. The built files are committed, so there is no build step.
+```bash
+npm install logql-query-box
+```
+
+Works with `yarn add` and `pnpm add` too. React 18 or newer is required.
+
+To install directly from GitHub instead, pin a tag. The built files are committed, so there is no build step.
 
 ```bash
 npm install github:darshanraj046/logql-query-box#v0.1.0
 ```
-
-Works with `yarn add` and `pnpm add` too. React 18 or newer is required.
 
 ## Quick start
 

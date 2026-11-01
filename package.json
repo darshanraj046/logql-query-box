@@ -37,7 +37,8 @@
     "test:loki": "vitest run --config vitest.loki.config.ts",
     "golden": "node scripts/generate-golden.mjs",
     "dev": "vite demo --port 5199",
-    "check": "npm run typecheck && npm test && npm run build"
+    "check": "npm run typecheck && npm test && npm run build",
+    "prepublishOnly": "npm run check"
   },
   "peerDependencies": {
     "react": ">=18.0.0",
