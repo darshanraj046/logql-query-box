@@ -15,7 +15,7 @@ becomes
   | detected_level=~"error|warn"
 ```
 
-![logql-query-box showing a filter, chips and compiled LogQL](docs/screenshot.png)
+![Animated walkthrough: typing a search with suggestions, seeing chips, getting valid LogQL, and catching a bad regex](docs/demo.gif)
 
 - **Suggestions** for fields, values with line counts, saved and recent queries, all keyboard driven.
 - **Chips** for every condition, removable with one click.
@@ -284,6 +284,8 @@ npm run test:loki
 ```
 
 `npm run golden` refreshes the recorded RE2 verdicts, which needs Go installed.
+
+`npm run record` rebuilds `docs/demo.gif` from the real component. Start `npm run dev` first. It needs Chrome and ffmpeg installed.
 
 ## License
 
