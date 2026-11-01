@@ -5,7 +5,7 @@ import { parse } from './parse'
 import { isRiskyRegex, reEsc, toJsRegex } from './regex'
 import { defaultSchema, resolveSchema, type ResolvedSchema, type Schema } from './schema'
 import { suggest, tokenAtCaret, type KnownValues } from './suggest'
-import { activeTree, evaluate, hasRiskyRegex, isNegative, problems, toFilter, valOf } from './tree'
+import { activeTree, evaluate, expandGroups, hasRiskyRegex, isNegative, problems, toFilter, valOf } from './tree'
 import type { Analysis, CompileResult, FieldValues, LogRecord, ParseResult, QueryNode, Span, SuggestExtras, SuggestionList } from './types'
 
 export interface EngineOptions {
@@ -58,6 +58,10 @@ export function createEngine(options: EngineOptions = {}): Engine {
   const maxBranches = options.maxBranches ?? MAX_BRANCHES
   const parseQuery = (q: string) => parse(q, schema, known)
   const compileTree = (tree: QueryNode | null) => compile(tree, schema, matchCase, maxBranches)
+  const activeExpanded = (node: QueryNode) => {
+    const tree = activeTree(node)
+    return tree && expandGroups(tree, schema)
+  }
 
   const toggleValue = (query: string, field: string, value: string, negative = false) => {
     let q = query
@@ -69,7 +73,7 @@ export function createEngine(options: EngineOptions = {}): Engine {
     schema,
     parse: parseQuery,
     compile: compileTree,
-    activeTree,
+    activeTree: activeExpanded,
     chipText: (node) => chipText(node, schema),
     isNegative,
     analyze(query) {
@@ -82,7 +86,7 @@ export function createEngine(options: EngineOptions = {}): Engine {
           : 'One of the /regular expressions/ is not valid.'
         return { query, parsed, error, tree: null, logql: NO_LOGQL, filter: null, riskyRegex: false }
       }
-      const tree = activeTree(parsed.root as QueryNode)
+      const tree = activeExpanded(parsed.root as QueryNode)
       const logql = compileTree(tree)
       const error = logql.tooMany
         ? `This filter expands into ${logql.count} OR branches. Use comma lists such as level:error,warn to stay under ${maxBranches}.`

@@ -77,6 +77,8 @@ export function LogSearch() {
 
 The compiler turns a filter into an OR of AND-branches, with one LogQL query per branch, so `(a OR b) (c OR d)` becomes four queries. Run each one with `query_range`, then merge and de-duplicate by timestamp and line. Filters that would need more than 12 queries are blocked with a message suggesting comma lists. Change the limit with `maxBranches`.
 
+With a `parser` on the schema, an OR stays in one query whenever LogQL can express it, so there is nothing to merge, no row comes back twice, and Loki returns the order. Only an OR that mixes raw line text with a field still splits into branches, and setting `parsed: true` on the line field removes that case too. See [Logs stored as JSON](#logs-stored-as-json).
+
 ## The search language
 
 | You type | It means |
@@ -118,10 +120,11 @@ Half typed input stays valid, so `a OR` or `level:` never shows an error while s
 | `onExecute` | `(analysis) => void` | | Fires when a valid filter runs. |
 | `onSave` | `(query, existing?) => void` | | Shows a save button. `existing` is set if this query is already saved. |
 | `values` | `FieldValues` | | Known values per field, plain strings or `{ value, count }`. Can change at any time. |
+| `loadValues` | `(field, { signal }) => Promise<FieldValue[]>` | | Fetches a field's values the first time someone picks one. See [Loading values on demand](#loading-values-on-demand). |
 | `schema` | `Schema` | Loki defaults | Fields and aliases. See below. |
-| `engine` | `Engine` | | A ready engine. Replaces `schema`, `values`, `matchCase`, `maxBranches` and `baseSelector`. |
+| `engine` | `Engine` | | A ready engine. Replaces `schema`, `values`, `loadValues`, `matchCase`, `maxBranches` and `baseSelector`. |
 | `matchCase` | `boolean` | `false` | Case sensitive line matching. |
-| `maxBranches` | `number` | `12` | Limit on OR expansion. |
+| `maxBranches` | `number` | `12` | Limit on OR expansion into separate queries. |
 | `baseSelector` | `Record<string, string>` | | Stream labels added to every query, such as `{ index: 'payments' }`. Can change at any time. |
 | `saved` | `SavedQuery[]` | | Shown in suggestions. |
 | `recent` | `string[]` | | Recent queries. When set, you own the list. |
@@ -193,7 +196,44 @@ const schema = {
 - `selectorField` picks the label used for the fallback `=~".+"` selector. It defaults to the first `baseSelector` label, then the first indexed field.
 - An invalid schema throws a clear error on first render.
 
-Other field options: `values` (a fixed list), `synonyms` (`{ prod: 'production' }`), `lowercase`, `color` (`'level'`, `'hash'`, `'accent'` or a function), `hint`, `excludeHint`, `example`.
+Other field options: `values` (a fixed list), `synonyms` (`{ prod: 'production' }`), `groups` (below), `lowercase`, `color` (`'level'`, `'hash'`, `'accent'` or a function), `hint`, `excludeHint`, `example`.
+
+### Value groups
+
+Different apps can store the same thing under different names. Java logs `WARN`, Python logs `WARNING`. A group makes them one value, so nobody has to know both.
+
+```tsx
+logLevel: {
+  label: 'Log Level',
+  aliases: ['level'],
+  values: ['ERROR', 'WARN', 'WARNING', 'INFO'],
+  groups: { WARN: ['WARN', 'WARNING'] }
+}
+```
+
+`level:warn` and `level:warning` both compile to `| logLevel=~"WARN|WARNING"`, and `-level:warn` excludes both. Chips and facets keep what was typed. A group name does not have to be a stored value, so `groups: { problem: ['ERROR', 'FATAL'] }` adds `level:problem`.
+
+`synonyms` map one word to one stored value. Use `groups` when one word should cover several stored values.
+
+### Loading values on demand
+
+Use `loadValues` when the list of values is too large or changes too often to fetch up front.
+
+```tsx
+<LogQLQueryBox
+  baseSelector={{ index }}
+  loadValues={async (field, { signal }) => {
+    const res = await fetch(`/api/logs/values?index=${index}&field=${field}`, { signal })
+    return res.json()
+  }}
+/>
+```
+
+- It runs the first time someone picks a value for a field, and once per field after that. Values already known through `values` stay visible until it answers.
+- The result is the same shape as `values`: plain strings or `{ value, count }`. It replaces what `values` holds for that field.
+- When `baseSelector` changes, the running request is aborted through `signal` and values load again for the new stream.
+- If it fails, the box keeps working with what it has and tries again the next time the list opens.
+- It does not run when you pass a ready `engine`. Headless code can do the same thing using `suggest().field`, which names the field while a value is being picked.
 
 ### Logs stored as JSON
 
@@ -205,7 +245,7 @@ const schema = {
   fields: {
     logLevel: { label: 'Log Level', aliases: ['level'], values: ['ERROR', 'WARN', 'INFO', 'DEBUG'] },
     serviceName: { label: 'App Name', aliases: ['app'] },
-    content: { label: 'Content', kind: 'line', aliases: ['msg'] }
+    content: { label: 'Content', kind: 'line', parsed: true, aliases: ['msg'] }
   }
 }
 
@@ -217,15 +257,27 @@ Now `level:error app:checkout-* timeout` compiles to:
 ```logql
 {index="payments"}
   |~ "(?i)timeout"
-  | json | __error__=""
+  | json logLevel, serviceName, content | __error__=""
   | logLevel="ERROR"
   | serviceName=~"^(?:checkout-.*)$"
+  | content=~"(?is).*timeout.*"
 ```
 
-- The parser stage is added only when a query filters on a field, and it comes after the line filters so Loki parses fewer lines. `parser: 'logfmt'` works the same way.
+And `level:error OR timeout` stays one query:
+
+```logql
+{index="payments"}
+  | json logLevel, content | __error__=""
+  | logLevel="ERROR" or content=~"(?is).*timeout.*"
+```
+
+`parsed: true` says the searchable text lives in a parsed field with the same name as the line field. Without it, words search the whole raw line, keys and all, so `service` matches every row that has a `serviceName` key. The `|~` line is only a fast first pass: it lets Loki skip lines before paying for the parser, and the `content` filter decides the result.
+
+- The parser stage is added only when a query filters on a field, and it comes after the line filters so Loki parses fewer lines. `json` extracts only the fields the query uses, which roughly halves what Loki sends back. `parser: 'logfmt'` works the same way, but extracts every field.
 - `baseSelector` labels are not fields, so they never appear in suggestions or chips. Values are escaped for you. While a value is empty, the query uses `label=~".+"`.
 - `baseSelector` is for building queries, not for access control. Anyone can change what a browser sends, so enforce access on your server.
-- Words are still searched on the raw line, so a word that is also a JSON key, such as `content`, matches every line.
+- The fast first pass is left out for excluded words, regexes, and text with characters a JSON encoder may rewrite, such as quotes, backslashes, slashes or non-ASCII letters. Those searches are still correct, but Loki parses every line in the range.
+- A word that also appears in every line, such as a JSON key, gets no help from the first pass either. On 1.5M lines over 24 hours, searching `service` took about 8 seconds. Narrow the time range or add a field filter.
 
 ## Without React
 
@@ -274,6 +326,8 @@ Generated queries are tested against a real Loki server, which surfaced behavior
 
 - **Selectors must be able to exclude the empty string.** Loki rejects `{app=~".*"}`, and also `{app=~"(foo)?"}` and `{app!="x"}`. The compiler tests each pattern against the empty string and adds a safe selector when needed, so `app:*` just works.
 - **Label filters need explicit anchors.** A pipeline filter such as `| level=~"e.*"` can match `debug`, because Loki may optimize it into a substring check. The compiler always writes `^(?:e.*)$` for pipeline regexes.
+- **Row order depends on the response format.** Without `X-Loki-Response-Encoding-Flags: categorize-labels`, Loki groups rows by every parsed field, so a `| json` query can return one group per row and rows arrive out of time order. Send that header from your backend. Each stream is still its own group, so this gives one ordered list only when one stream holds the logs. Loki can split a busy stream on its own, which shows up as a `__stream_shard__` label.
+- **Structured metadata does not sort anything.** Loki orders rows by timestamp only, and without that header each set of metadata values is also its own group.
 - **RE2 is not JavaScript.** `(?P<x>a)` is valid RE2 and invalid JavaScript, while `\y` is the reverse. Validation follows RE2, and it is checked against the Go parser that Loki uses.
 
 ## Limits

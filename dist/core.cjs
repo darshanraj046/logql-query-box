@@ -495,6 +495,15 @@ function negate(n) {
 function isNegative(n) {
   return n.type === "cond" && (n.op === "neq" || n.op === "not_in" || n.op === "not_contains" || n.op === "not_regex");
 }
+function expandGroups(n, schema) {
+  if (n.type === "group") return { ...n, children: n.children.map((ch) => expandGroups(ch, schema)) };
+  const groups = schema.fields.get(n.field)?.groups;
+  if (!groups?.size || !(n.op === "eq" || n.op === "neq" || n.op === "in" || n.op === "not_in")) return n;
+  const values = Array.isArray(n.value) ? n.value : [valOf(n)];
+  const expanded = [...new Set(values.flatMap((v) => groups.get(v.toLowerCase()) ?? [v]))];
+  if (expanded.length === values.length && expanded.every((v, i) => v === values[i])) return n;
+  return { ...n, op: isNegative(n) ? "not_in" : "in", value: expanded };
+}
 function testCond(c, r, schema, matchCase) {
   const raw = r[c.field];
   const hay = String(raw == null ? "" : raw);
@@ -570,6 +579,7 @@ function chipLabel(text) {
 // src/core/compile.ts
 var MAX_BRANCHES = 12;
 var INLINE_I = /^\(\?[imsU]*i[imsU]*(?:-[imsU]+)?\)/;
+var RAW_SAFE = /^[\w .:,;=-]+$/;
 function countBranches(n) {
   if (n.type === "cond") return 1;
   const parts = n.children.map(countBranches);
@@ -684,25 +694,118 @@ function canAnchorStream(c) {
 function baseMatchers(schema) {
   return schema.baseSelector.filter(([, value]) => value !== "").map(([name, value]) => `${name}=${logqlString(value)}`);
 }
-function compileBranch(conds, schema, matchCase) {
+function unwrap(n) {
+  return n.type === "group" && n.children.length === 1 ? unwrap(n.children[0]) : n;
+}
+function conjuncts(n) {
+  const u = unwrap(n);
+  return u.type === "group" && u.op === "AND" ? u.children.flatMap(conjuncts) : [u];
+}
+function leaves(n) {
+  return n.type === "cond" ? [n] : n.children.flatMap(leaves);
+}
+function lineRegex(c) {
+  const v = valOf(c);
+  switch (c.op) {
+    case "eq":
+    case "neq":
+      return `^${reEsc(v)}$`;
+    case "starts":
+      return `^${reEsc(v)}`;
+    case "ends":
+      return `${reEsc(v)}$`;
+    case "regex":
+    case "not_regex":
+      return v;
+    case "in":
+    case "not_in":
+      return listOf(c).map(reEsc).join("|");
+    default:
+      return reEsc(v);
+  }
+}
+function parsedLineMatcher(c, matchCase) {
+  const body = lineRegex(c);
+  const plain = c.op === "contains" || c.op === "not_contains";
+  const pattern = plain ? `(?${matchCase ? "" : "i"}s).*${body}.*` : `${matchCase ? "" : "(?i)"}^(?s:.*)(?:${body})(?s:.*)$`;
+  return `${c.field}${isNegative(c) ? "!~" : "=~"}${logqlString(pattern)}`;
+}
+function labelExpr(n, schema, matchCase, nested = false) {
+  const u = unwrap(n);
+  if (u.type === "cond") return u.field === schema.lineField ? parsedLineMatcher(u, matchCase) : pipelineMatcher(u);
+  const body = u.children.map((ch) => labelExpr(ch, schema, matchCase, true)).join(u.op === "OR" ? " or " : " and ");
+  return nested ? `(${body})` : body;
+}
+function lineAlternatives(n) {
+  const u = unwrap(n);
+  if (u.type === "cond") {
+    if (isNegative(u)) return null;
+    return [u.op === "regex" ? `(?:${lineRegex(u)})` : lineRegex(u)];
+  }
+  if (u.op !== "OR") return null;
+  const parts = u.children.map(lineAlternatives);
+  return parts.every(Boolean) ? parts.flat() : null;
+}
+function rawHint(n, schema) {
+  const u = unwrap(n);
+  if (u.type === "group") {
+    const hints = u.children.map((ch) => rawHint(ch, schema));
+    if (u.op === "OR") return hints.every(Boolean) ? hints.join("|") : null;
+    return hints.find(Boolean) ?? null;
+  }
+  if (u.field !== schema.lineField || isNegative(u) || u.op === "regex") return null;
+  const terms = u.op === "in" ? listOf(u) : [valOf(u)];
+  return terms.every((v) => RAW_SAFE.test(v)) ? terms.map(reEsc).join("|") : null;
+}
+function fitsOneQuery(n, schema) {
+  if (n.type === "cond" || schema.parsedLine) return true;
+  const conds = leaves(n);
+  if (conds.every((c) => c.field !== schema.lineField)) return true;
+  return conds.every((c) => c.field === schema.lineField) && lineAlternatives(n) !== null;
+}
+function parserStage(schema, fields) {
+  return schema.parser === "json" ? `| json ${[...fields].join(", ")} | __error__=""` : `| ${schema.parser} | __error__=""`;
+}
+function compileBranch(parts, schema, matchCase) {
   const sel = baseMatchers(schema);
   const lines = [];
   const labs = [];
+  const parsed = /* @__PURE__ */ new Set();
   let strong = sel.length > 0;
-  for (const c of conds) {
-    if (c.field === schema.lineField) lines.push(lineFilter(c, matchCase));
-    else if (schema.fields.get(c.field)?.indexed) {
-      sel.push(labelMatcher(c));
-      if (canAnchorStream(c)) strong = true;
-    } else labs.push(`| ${pipelineMatcher(c)}`);
+  const pre = matchCase ? "" : "(?i)";
+  const parse2 = (c) => {
+    if (!schema.fields.get(c.field)?.indexed) parsed.add(c.field);
+  };
+  for (const part of parts) {
+    const hint = schema.parsedLine ? rawHint(part, schema) : null;
+    if (hint) lines.push(`|~ ${logqlString(pre + hint)}`);
+    if (part.type === "group") {
+      if (!schema.parsedLine && leaves(part).every((c) => c.field === schema.lineField)) {
+        lines.push(`|~ ${logqlString(pre + lineAlternatives(part).join("|"))}`);
+      } else {
+        labs.push(`| ${labelExpr(part, schema, matchCase)}`);
+        leaves(part).forEach(parse2);
+      }
+    } else if (part.field === schema.lineField && !schema.parsedLine) lines.push(lineFilter(part, matchCase));
+    else if (schema.fields.get(part.field)?.indexed) {
+      sel.push(labelMatcher(part));
+      if (canAnchorStream(part)) strong = true;
+    } else {
+      labs.push(`| ${labelExpr(part, schema, matchCase)}`);
+      parse2(part);
+    }
   }
   if (!strong) sel.push(`${schema.selectorField}=~".+"`);
-  const parser = labs.length && schema.parser ? [`| ${schema.parser} | __error__=""`] : [];
+  const parser = parsed.size && schema.parser ? [parserStage(schema, parsed)] : [];
   return `{${sel.join(", ")}}${[...lines, ...parser, ...labs].map((s) => `
   ${s}`).join("")}`;
 }
 function compile(tree, schema, matchCase, maxBranches) {
   if (!tree) return { branches: [compileBranch([], schema, matchCase)], tooMany: false, count: 1 };
+  if (schema.parser) {
+    const parts = conjuncts(tree);
+    if (parts.every((p) => fitsOneQuery(p, schema))) return { branches: [compileBranch(parts, schema, matchCase)], tooMany: false, count: 1 };
+  }
   const count = countBranches(tree);
   if (count > maxBranches) return { tooMany: true, count: Math.min(count, Number.MAX_SAFE_INTEGER), branches: [] };
   const branches = [...new Set(dnf(tree).map((b) => compileBranch(b, schema, matchCase)))];
@@ -1156,17 +1259,33 @@ var defaultSchema = {
   selectorField: "service_name",
   excludeExample: "level:debug"
 };
+function resolveGroups(field, groups = {}) {
+  const out = /* @__PURE__ */ new Map();
+  for (const [key, list] of Object.entries(groups)) {
+    const members = [...new Set(list.filter(Boolean))];
+    if (!members.length) throw new Error(`logql-query-box: group "${key}" on "${field}" has no values.`);
+    for (const value of new Set([key, ...members].map((v) => v.toLowerCase()))) {
+      if (out.has(value)) throw new Error(`logql-query-box: "${value}" is in two groups on "${field}".`);
+      out.set(value, members);
+    }
+  }
+  return out;
+}
 function resolveSchema(schema, baseSelector = {}) {
   const fields = /* @__PURE__ */ new Map();
   const alias = /* @__PURE__ */ new Map();
   let lineField = "";
+  let parsedLine = false;
   let firstIndexed = "";
   for (const [name, def] of Object.entries(schema.fields)) {
     if (!LABEL_NAME.test(name)) throw new Error(`logql-query-box: "${name}" is not a valid Loki label name.`);
     const kind = def.kind ?? "label";
+    if (def.parsed && kind !== "line") throw new Error(`logql-query-box: "parsed" only applies to the line field, not "${name}".`);
+    if (def.parsed && !schema.parser) throw new Error("logql-query-box: a parsed line field needs a schema parser.");
     if (kind === "line") {
       if (lineField) throw new Error("logql-query-box: a schema can only have one line field.");
       lineField = name;
+      parsedLine = !!def.parsed;
     } else if (def.indexed && !firstIndexed) {
       firstIndexed = name;
     }
@@ -1183,7 +1302,8 @@ function resolveSchema(schema, baseSelector = {}) {
       name,
       kind,
       primary: names[0],
-      synonyms: new Map(Object.entries(def.synonyms ?? {}))
+      synonyms: new Map(Object.entries(def.synonyms ?? {})),
+      groups: resolveGroups(name, def.groups)
     });
   }
   if (!lineField) throw new Error('logql-query-box: a schema needs one field with kind "line".');
@@ -1200,6 +1320,7 @@ function resolveSchema(schema, baseSelector = {}) {
     fields,
     alias,
     lineField,
+    parsedLine,
     selectorField,
     excludeExample: schema.excludeExample ?? `${firstLabel ? firstLabel.primary : "field"}:value`,
     parser: schema.parser,
@@ -1291,7 +1412,7 @@ function suggest(src, caret, schema, known, extras = {}) {
         text: `${neg}${m[1]}:${prior}${quoteValue(o.v)} `
       });
     }
-    return { head: `Values for ${field.label}`, items, extra: [] };
+    return { head: `Values for ${field.label}`, field: name, items, extra: [] };
   }
   if (body) {
     const low = body.toLowerCase();
@@ -1337,6 +1458,10 @@ function createEngine(options = {}) {
   const maxBranches = options.maxBranches ?? MAX_BRANCHES;
   const parseQuery = (q) => parse(q, schema, known);
   const compileTree = (tree) => compile(tree, schema, matchCase, maxBranches);
+  const activeExpanded = (node) => {
+    const tree = activeTree(node);
+    return tree && expandGroups(tree, schema);
+  };
   const toggleValue = (query, field, value, negative = false) => {
     let q = query;
     if (activeValues(parseQuery(q), field, !negative).has(value)) q = facetEdit(q, parseQuery(q), schema, field, value, !negative);
@@ -1346,7 +1471,7 @@ function createEngine(options = {}) {
     schema,
     parse: parseQuery,
     compile: compileTree,
-    activeTree,
+    activeTree: activeExpanded,
     chipText: (node) => chipText(node, schema),
     isNegative,
     analyze(query) {
@@ -1357,7 +1482,7 @@ function createEngine(options = {}) {
         const error2 = found.some((p) => p.startsWith("Loki")) ? "One of the /regular expressions/ is not valid for Loki. Loki uses RE2, so lookaround and backreferences do not work." : "One of the /regular expressions/ is not valid.";
         return { query, parsed, error: error2, tree: null, logql: NO_LOGQL, filter: null, riskyRegex: false };
       }
-      const tree = activeTree(parsed.root);
+      const tree = activeExpanded(parsed.root);
       const logql = compileTree(tree);
       const error = logql.tooMany ? `This filter expands into ${logql.count} OR branches. Use comma lists such as level:error,warn to stay under ${maxBranches}.` : null;
       return { query, parsed, error, tree, logql, filter: tree ? toFilter(tree) : null, riskyRegex: !!tree && hasRiskyRegex(tree) };

@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event'
 import { createRef, StrictMode, useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import { LogQLQueryBox, type LogQLQueryBoxHandle, type LogQLQueryBoxProps } from '../src'
+import { createEngine, LogQLQueryBox, type LogQLQueryBoxHandle, type LogQLQueryBoxProps } from '../src'
 import { engineValues, SAVED } from './helpers'
 
 const box = () => screen.getByRole('combobox') as HTMLTextAreaElement
@@ -1110,6 +1110,137 @@ describe('baseSelector prop', () => {
     const { user } = setup({ baseSelector: { index: 'payments' } })
     await user.click(box())
     expect(optionLabels()).not.toContain('index:')
+  })
+})
+
+describe('loadValues prop', () => {
+  const deferred = () => {
+    let resolve!: (list: { value: string; count?: number }[]) => void
+    let reject!: (e: Error) => void
+    const promise = new Promise<{ value: string; count?: number }[]>((res, rej) => {
+      resolve = res
+      reject = rej
+    })
+    return { promise, resolve, reject }
+  }
+
+  it('loads a field once and shows its values with counts', async () => {
+    const loadValues = vi.fn(async () => [{ value: 'from-api', count: 7 }])
+    const { user } = setup({ values: {}, loadValues })
+    await user.type(box(), 'app:')
+    expect(await screen.findByRole('option', { name: /from-api/ })).toHaveTextContent('7 lines')
+    await user.type(box(), 'f')
+    expect(loadValues).toHaveBeenCalledTimes(1)
+    expect(loadValues.mock.calls[0]).toEqual(['service_name', { signal: expect.any(AbortSignal) }])
+  })
+
+  it('does not load until a value is being picked', async () => {
+    const loadValues = vi.fn(async () => [])
+    const { user } = setup({ loadValues })
+    await user.type(box(), 'ap')
+    expect(loadValues).not.toHaveBeenCalled()
+  })
+
+  it('shows a loading row, then replaces it', async () => {
+    const d = deferred()
+    const { user } = setup({ values: {}, loadValues: () => d.promise })
+    await user.type(box(), 'app:')
+    expect(await screen.findAllByText('Loading values…')).not.toHaveLength(0)
+    expect(box()).toHaveAttribute('aria-expanded', 'true')
+    d.resolve([{ value: 'late' }])
+    expect(await screen.findByRole('option', { name: /late/ })).toBeInTheDocument()
+    expect(screen.queryByText('Loading values…')).not.toBeInTheDocument()
+  })
+
+  it('keeps the values it already has while loading', async () => {
+    const d = deferred()
+    const { user } = setup({ loadValues: () => d.promise })
+    await user.type(box(), 'app:')
+    expect(optionLabels()).toContain('checkout-api')
+    expect(await screen.findAllByText('Loading values…')).not.toHaveLength(0)
+    d.resolve([{ value: 'late' }])
+    await screen.findByRole('option', { name: /late/ })
+  })
+
+  it('uses loaded values to fold what was typed', async () => {
+    const { user } = setup({ values: {}, loadValues: async () => [{ value: 'Billing' }], defaultLogqlOpen: true })
+    await user.type(box(), 'app:billing')
+    await waitFor(() => expect(document.querySelector('.lqb-logql pre')).toHaveTextContent('service_name="Billing"'))
+  })
+
+  it('closes on Escape while loading', async () => {
+    const d = deferred()
+    const { user } = setup({ values: {}, loadValues: () => d.promise })
+    await user.type(box(), 'app:')
+    await screen.findAllByText('Loading values…')
+    await user.keyboard('{Escape}')
+    expect(box()).toHaveAttribute('aria-expanded', 'false')
+    expect(box()).toHaveFocus()
+  })
+
+  it('keeps working when loading fails, and tries again next time', async () => {
+    const loadValues = vi.fn().mockRejectedValueOnce(new Error('down')).mockResolvedValue([{ value: 'second-try' }])
+    const { user } = setup({ loadValues })
+    await user.type(box(), 'app:')
+    await waitFor(() => expect(loadValues).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(screen.queryByText('Loading values…')).not.toBeInTheDocument())
+    expect(optionLabels()).toContain('checkout-api')
+    await user.keyboard('{Escape}')
+    await user.click(box())
+    expect(await screen.findByRole('option', { name: /second-try/ })).toBeInTheDocument()
+    expect(loadValues).toHaveBeenCalledTimes(2)
+  })
+
+  it('treats a bad result as a failure', async () => {
+    const loadValues = vi.fn(async () => 'nope' as unknown as { value: string }[])
+    const { user } = setup({ loadValues })
+    await user.type(box(), 'app:')
+    await waitFor(() => expect(screen.queryByText('Loading values…')).not.toBeInTheDocument())
+    expect(optionLabels()).toContain('checkout-api')
+  })
+
+  it('survives a loader that throws straight away', async () => {
+    const { user } = setup({
+      loadValues: () => {
+        throw new Error('bad')
+      }
+    })
+    await user.type(box(), 'app:')
+    await waitFor(() => expect(screen.queryByText('Loading values…')).not.toBeInTheDocument())
+    expect(optionLabels()).toContain('checkout-api')
+  })
+
+  it('drops a late answer and loads again when the index changes', async () => {
+    const first = deferred()
+    const loadValues = vi.fn().mockReturnValueOnce(first.promise).mockResolvedValue([{ value: 'new-index' }])
+    const { user, rerender } = setup({ values: {}, loadValues, baseSelector: { index: 'one' } })
+    await user.type(box(), 'app:')
+    await waitFor(() => expect(loadValues).toHaveBeenCalledTimes(1))
+    const signal = loadValues.mock.calls[0][1].signal as AbortSignal
+    rerender(<LogQLQueryBox values={{}} loadValues={loadValues} baseSelector={{ index: 'two' }} recentStorageKey={null} defaultValue="app:" />)
+    expect(signal.aborted).toBe(true)
+    first.resolve([{ value: 'old-index' }])
+    expect(await screen.findByRole('option', { name: /new-index/ })).toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: /old-index/ })).not.toBeInTheDocument()
+  })
+
+  it('cancels on unmount', async () => {
+    const d = deferred()
+    const loadValues = vi.fn(() => d.promise)
+    const { user, unmount } = setup({ values: {}, loadValues })
+    await user.type(box(), 'app:')
+    await waitFor(() => expect(loadValues).toHaveBeenCalled())
+    const signal = (loadValues.mock.calls[0] as unknown as [string, { signal: AbortSignal }])[1].signal
+    unmount()
+    expect(signal.aborted).toBe(true)
+    d.resolve([{ value: 'gone' }])
+  })
+
+  it('is ignored when a ready engine is passed', async () => {
+    const loadValues = vi.fn(async () => [])
+    const { user } = setup({ engine: createEngine(), loadValues })
+    await user.type(box(), 'app:')
+    expect(loadValues).not.toHaveBeenCalled()
   })
 })
 

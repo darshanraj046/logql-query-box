@@ -166,6 +166,7 @@ var defaultLabels = {
   removeFilter: (text) => `Remove filter ${text}`,
   moreFilters: (count) => `+${count} more`,
   suggestionCount: (count) => `${count} ${count === 1 ? "suggestion" : "suggestions"} available`,
+  loadingValues: "Loading values\u2026",
   savedAndRecent: "Saved and recent"
 };
 var defaultExamples = ["level:error,warn", "level:error (timeout OR refused)", "apptype:java /\\w+Exception/", "-level:debug"];
@@ -243,6 +244,7 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
     onSave,
     schema,
     values,
+    loadValues,
     matchCase,
     maxBranches,
     baseSelector,
@@ -272,7 +274,10 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
   } = props;
   const labels = (0, import_react2.useMemo)(() => ({ ...defaultLabels, ...props.labels }), [props.labels]);
   const baseKey = JSON.stringify(baseSelector);
-  const engine = (0, import_react2.useMemo)(() => props.engine ?? (0, import_core.createEngine)({ schema, values, matchCase, maxBranches, baseSelector }), [props.engine, schema, values, matchCase, maxBranches, baseKey]);
+  const [loaded, setLoaded] = (0, import_react2.useState)({});
+  const [loading, setLoading] = (0, import_react2.useState)([]);
+  const allValues = (0, import_react2.useMemo)(() => ({ ...values, ...loaded }), [values, loaded]);
+  const engine = (0, import_react2.useMemo)(() => props.engine ?? (0, import_core.createEngine)({ schema, values: allValues, matchCase, maxBranches, baseSelector }), [props.engine, schema, allValues, matchCase, maxBranches, baseKey]);
   const controlled = value !== void 0;
   const [inner, setInner] = (0, import_react2.useState)(defaultValue);
   const query = controlled ? value : inner;
@@ -289,6 +294,10 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
   const pendingCaret = (0, import_react2.useRef)(null);
   const copyTimer = (0, import_react2.useRef)(void 0);
   const mountRan = (0, import_react2.useRef)(false);
+  const loader = (0, import_react2.useRef)(loadValues);
+  const requested = (0, import_react2.useRef)(/* @__PURE__ */ new Set());
+  const loadAbort = (0, import_react2.useRef)(null);
+  loader.current = loadValues;
   const baseId = (0, import_react2.useId)();
   const listId = `${baseId}-list`;
   const errorId = `${baseId}-error`;
@@ -300,6 +309,9 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
   const items = (0, import_react2.useMemo)(() => sugg ? [...sugg.items, ...sugg.extra] : [], [sugg]);
   const open = items.length > 0;
   const at = menu ? Math.min(menu.at, items.length - 1) : -1;
+  const valueField = sugg?.field;
+  const waiting = !!valueField && loading.includes(valueField);
+  const shown = open || waiting;
   const usable = (text) => [...text.matchAll(/(?:^|[\s(`-])([A-Za-z_][A-Za-z0-9_]*):/g)].every((m) => engine.schema.alias.has(m[1].toLowerCase()));
   const shownExamples = examples ?? defaultExamples.filter(usable);
   const shownSyntax = syntax ?? defaultSyntax.filter((s) => usable(s[0]));
@@ -307,6 +319,29 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
   (0, import_react2.useEffect)(() => {
     if (recent === void 0 && recentStorageKey) setStoredRecent(readRecent(recentStorageKey));
   }, [recent, recentStorageKey]);
+  (0, import_react2.useEffect)(() => {
+    const controller = new AbortController();
+    loadAbort.current = controller;
+    requested.current.clear();
+    setLoaded((x) => Object.keys(x).length ? {} : x);
+    setLoading((x) => x.length ? [] : x);
+    return () => controller.abort();
+  }, [baseKey]);
+  (0, import_react2.useEffect)(() => {
+    const load = loader.current;
+    const controller = loadAbort.current;
+    if (!valueField || !load || !controller || props.engine || requested.current.has(valueField)) return;
+    const field = valueField;
+    requested.current.add(field);
+    setLoading((x) => [...x, field]);
+    const finish = (list) => {
+      if (controller.signal.aborted) return;
+      if (Array.isArray(list)) setLoaded((x) => ({ ...x, [field]: list }));
+      else requested.current.delete(field);
+      setLoading((x) => x.filter((f) => f !== field));
+    };
+    Promise.resolve().then(() => load(field, { signal: controller.signal })).then(finish, () => finish());
+  }, [valueField, baseKey, props.engine]);
   useIsoLayoutEffect(() => {
     if (pendingCaret.current === null) return;
     const el = inputRef.current;
@@ -319,14 +354,14 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
   });
   useIsoLayoutEffect(() => {
     const list = listRef.current;
-    if (!open || !list || !("showPopover" in list)) return;
+    if (!shown || !list || !("showPopover" in list)) return;
     list.setAttribute("popover", "manual");
     list.showPopover();
-  }, [open]);
+  }, [shown]);
   useIsoLayoutEffect(() => {
     const list = listRef.current;
     const anchor = wrapRef.current;
-    if (!open || !list || !anchor) return;
+    if (!shown || !list || !anchor) return;
     const place = () => {
       const box = anchor.getBoundingClientRect();
       const below = window.innerHeight - box.bottom - MENU_GAP * 2;
@@ -345,7 +380,7 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
       window.removeEventListener("resize", place);
       window.removeEventListener("scroll", place, true);
     };
-  }, [open, items]);
+  }, [shown, items, waiting]);
   (0, import_react2.useEffect)(() => {
     if (!open || at < 0) return;
     document.getElementById(optionId(at))?.scrollIntoView?.({ block: "nearest" });
@@ -426,7 +461,7 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
         if (!running) execute();
       }
     } else if (e.key === "Escape") {
-      if (open) {
+      if (shown) {
         e.stopPropagation();
         setMenu(null);
       } else {
@@ -516,8 +551,8 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
               ref: inputRef,
               rows,
               role: "combobox",
-              "aria-expanded": open,
-              "aria-controls": open ? listId : void 0,
+              "aria-expanded": shown,
+              "aria-controls": shown ? listId : void 0,
               "aria-activedescendant": open && at >= 0 ? optionId(at) : void 0,
               "aria-autocomplete": "list",
               "aria-label": labels.ariaLabel,
@@ -580,7 +615,7 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
           analysis.parsed.children.length > CHIP_LIMIT && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "lqb-chip lqb-chip-more", children: labels.moreFilters(analysis.parsed.children.length - CHIP_LIMIT) })
         ] })
       ] }),
-      open && sugg && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "lqb-sugg", ref: listRef, id: listId, role: "listbox", "aria-label": labels.ariaLabel, onMouseDown: (e) => e.preventDefault(), children: [
+      shown && sugg && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "lqb-sugg", ref: listRef, id: listId, role: "listbox", "aria-label": labels.ariaLabel, onMouseDown: (e) => e.preventDefault(), children: [
         sugg.items.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { role: "group", "aria-label": sugg.head || labels.ariaLabel, children: [
           sugg.head && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "lqb-sg-h", "aria-hidden": "true", children: sugg.head }),
           sugg.items.map((it, i) => row(it, i))
@@ -588,9 +623,10 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
         sugg.extra.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { role: "group", "aria-label": labels.savedAndRecent, children: [
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "lqb-sg-h", "aria-hidden": "true", children: labels.savedAndRecent }),
           sugg.extra.map((it, i) => row(it, i + sugg.items.length))
-        ] })
+        ] }),
+        waiting && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "lqb-sg-h", "aria-hidden": "true", children: labels.loadingValues })
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "lqb-sr", "aria-live": "polite", children: open ? labels.suggestionCount(items.length) : "" })
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "lqb-sr", "aria-live": "polite", children: waiting ? labels.loadingValues : open ? labels.suggestionCount(items.length) : "" })
     ] }),
     analysis.error && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "lqb-error", id: errorId, role: "alert", children: analysis.error }),
     !query.trim() && shownExamples.length > 0 && interactive && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "lqb-try", children: [

@@ -102,6 +102,7 @@ export interface Suggestion {
 
 export interface SuggestionList {
   head: string
+  field?: string
   items: Suggestion[]
   extra: Suggestion[]
 }

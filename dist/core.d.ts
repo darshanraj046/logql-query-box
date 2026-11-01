@@ -2,9 +2,11 @@ interface FieldDef {
     label: string;
     kind?: 'label' | 'line';
     indexed?: boolean;
+    parsed?: boolean;
     aliases?: string[];
     values?: string[];
     synonyms?: Record<string, string>;
+    groups?: Record<string, string[]>;
     lowercase?: boolean;
     color?: 'level' | 'hash' | 'accent' | ((value: string) => string);
     hint?: string;
@@ -18,16 +20,18 @@ interface Schema {
     excludeExample?: string;
     parser?: LogParser;
 }
-interface ResolvedField extends Omit<FieldDef, 'synonyms'> {
+interface ResolvedField extends Omit<FieldDef, 'synonyms' | 'groups'> {
     name: string;
     kind: 'label' | 'line';
     primary: string;
     synonyms: Map<string, string>;
+    groups: Map<string, string[]>;
 }
 interface ResolvedSchema {
     fields: Map<string, ResolvedField>;
     alias: Map<string, string>;
     lineField: string;
+    parsedLine: boolean;
     selectorField: string;
     excludeExample: string;
     parser?: LogParser;
@@ -121,6 +125,7 @@ interface Suggestion {
 }
 interface SuggestionList {
     head: string;
+    field?: string;
     items: Suggestion[];
     extra: Suggestion[];
 }

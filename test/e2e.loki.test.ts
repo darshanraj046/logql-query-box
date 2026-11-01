@@ -112,8 +112,9 @@ describe('JSON logs under one stream label against a real Loki', () => {
   const jsonStart = start - 3600000
   const jsonStamp = (id: number) => (BigInt(jsonStart) * 1000000n + BigInt(id) * 1000000n).toString()
   const stored = records.map((row) => {
-    const fields = { ts: jsonStart + row.id, ...(row.detected_level ? { logLevel: row.detected_level } : {}), serviceName: row.service_name, serviceCategory: row.service_category, content: row.line }
-    return { id: row.id, raw: JSON.stringify(fields), logLevel: row.detected_level, serviceName: row.service_name, serviceCategory: row.service_category }
+    const content = row.id % 3 === 0 ? `first line of trace\n${row.line}\n  at com.acme.Order.total(Order.java:42)\nlast line` : row.line
+    const fields = { ts: jsonStart + row.id, ...(row.detected_level ? { logLevel: row.detected_level } : {}), serviceName: row.service_name, serviceCategory: row.service_category, content }
+    return { id: row.id, raw: JSON.stringify(fields), content, logLevel: row.detected_level, serviceName: row.service_name, serviceCategory: row.service_category }
   })
   const fromStamp = new Map(stored.map((row) => [jsonStamp(row.id), row.id]))
   const schema: Schema = {
@@ -125,7 +126,17 @@ describe('JSON logs under one stream label against a real Loki', () => {
       content: { ...defaultSchema.fields.line, aliases: ['msg', 'message', 'line', 'text'] }
     }
   }
-  const engineFor = (matchCase: boolean) => createEngine({ schema, baseSelector: { index }, matchCase, values: { serviceName: [...new Set(records.map((r) => r.service_name))] } })
+  const parsedSchema: Schema = {
+    ...schema,
+    fields: {
+      ...schema.fields,
+      logLevel: { ...schema.fields.logLevel, groups: { warn: ['warn', 'unknown'] } },
+      content: { ...schema.fields.content, parsed: true }
+    }
+  }
+  const appValues = { serviceName: [...new Set(records.map((r) => r.service_name))] }
+  const engineFor = (matchCase: boolean) => createEngine({ schema, baseSelector: { index }, matchCase, values: appValues })
+  const parsedEngineFor = (matchCase: boolean) => createEngine({ schema: parsedSchema, baseSelector: { index }, matchCase, values: appValues })
 
   async function runJson(query: string): Promise<number[]> {
     const u = new URL(`${base}/loki/api/v1/query_range`)
@@ -189,5 +200,52 @@ describe('JSON logs under one stream label against a real Loki', () => {
     })
     expect(failures.slice(0, 12).join('\n')).toBe('')
     expect(executed).toBeGreaterThan(QUERIES / 3)
+  })
+
+  it.each([
+    ['case insensitive', false, 51],
+    ['match case', true, 52]
+  ] as const)('parsed line, %s, one query returns exactly the rows evaluate() picks with no repeats', async (_name, matchCase, seed) => {
+    const engine = parsedEngineFor(matchCase)
+    const r = rng(seed)
+    const queries: string[] = []
+    while (queries.length < QUERIES) queries.push(genExtendedQuery(r))
+    const failures: string[] = []
+    let executed = 0
+    await pool(queries, 12, async (q) => {
+      const a = engine.analyze(q)
+      if (a.error) return
+      executed++
+      const expected = stored.filter((row) => engine.evaluate(a.tree, { logLevel: row.logLevel, serviceName: row.serviceName, serviceCategory: row.serviceCategory, content: row.content })).map((row) => row.id).sort((x, y) => x - y)
+      try {
+        if (a.logql.branches.length !== 1) throw new Error(`expected one query, got ${a.logql.branches.length}`)
+        const actual = (await runJson(a.logql.branches[0])).sort((x, y) => x - y)
+        if (JSON.stringify(actual) !== JSON.stringify(expected)) failures.push(`${JSON.stringify(q)} loki=${actual.length} local=${expected.length} logql=${JSON.stringify(a.logql.branches)}`)
+      } catch (e) {
+        failures.push(`${JSON.stringify(q)} ${(e as Error).message}`)
+      }
+    })
+    console.log(`parsed line ${_name}: ${executed} of ${queries.length} queries executed, ${failures.length} failures`)
+    expect(failures.slice(0, 12).join('\n')).toBe('')
+    expect(executed).toBeGreaterThan(QUERIES / 3)
+  })
+
+  it('finds a word in the field, not in the JSON keys around it', async () => {
+    const raw = await runJson(engineFor(false).analyze('service').logql.branches[0])
+    const parsed = await runJson(parsedEngineFor(false).analyze('service').logql.branches[0])
+    expect(raw).toHaveLength(stored.length)
+    expect(parsed).toEqual(stored.filter((row) => row.content.toLowerCase().includes('service')).map((row) => row.id))
+  })
+
+  it('finds a word on any line of a multi-line message', async () => {
+    const rows = await runJson(parsedEngineFor(false).analyze('"com.acme.order.total"').logql.branches[0])
+    const multi = stored.filter((row) => row.content.toLowerCase().includes('com.acme.order.total')).map((row) => row.id)
+    expect(multi.length).toBeGreaterThan(100)
+    expect(rows.sort((x, y) => x - y)).toEqual(multi)
+  })
+
+  it('a value group finds every stored spelling', async () => {
+    const rows = await runJson(parsedEngineFor(false).analyze('level:warn').logql.branches[0])
+    expect(rows.sort((x, y) => x - y)).toEqual(stored.filter((row) => row.logLevel === 'warn' || row.logLevel === 'unknown').map((row) => row.id))
   })
 })

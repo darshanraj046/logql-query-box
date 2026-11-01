@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.0
+
+Added:
+
+- With a `parser` on the schema, an OR stays in one query whenever LogQL can express it, so there is nothing to merge, no row repeats, and the branch limit does not apply. An OR that mixes raw line text with a field still splits into branches.
+- `parsed: true` on the line field searches the parsed field, such as `content`, instead of the whole raw line. Searching `service` no longer matches every row with a `serviceName` key. Plain words get a fast raw filter first, so Loki skips most lines before parsing them.
+- `groups` on a field: `groups: { WARN: ['WARN', 'WARNING'] }` makes `level:warn` cover both stored values.
+- `loadValues` on `LogQLQueryBox`: fetches a field's values the first time someone picks one, and aborts when `baseSelector` changes.
+- `field` on `SuggestionList`, set while a value is being picked.
+- `loadingValues` label.
+
+Changed:
+
+- With `parser: 'json'`, queries now write `| json logLevel, serviceName` instead of `| json`. Rows are the same, and with the `categorize-labels` response flag the response is about 45% smaller. `logfmt` is unchanged.
+
+Without a `parser`, compiled queries are identical to 0.2.0.
+
 ## 0.2.0
 
 Added:

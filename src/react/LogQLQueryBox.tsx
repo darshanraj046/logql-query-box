@@ -11,7 +11,7 @@ import {
   type KeyboardEvent,
   type ReactNode
 } from 'react'
-import { chipLabel, createEngine, type Analysis, type Engine, type FieldValues, type SavedQuery, type Schema, type Suggestion } from '../core'
+import { chipLabel, createEngine, type Analysis, type Engine, type FieldValue, type FieldValues, type SavedQuery, type Schema, type Suggestion } from '../core'
 import { HelpDialog } from './HelpDialog'
 import { defaultExamples, defaultLabels, defaultNotes, defaultSyntax, type Labels } from './labels'
 
@@ -42,6 +42,7 @@ export interface LogQLQueryBoxProps {
   engine?: Engine
   schema?: Schema
   values?: FieldValues
+  loadValues?: (field: string, context: { signal: AbortSignal }) => Promise<FieldValue[]>
   matchCase?: boolean
   maxBranches?: number
   baseSelector?: Record<string, string>
@@ -118,6 +119,7 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
     onSave,
     schema,
     values,
+    loadValues,
     matchCase,
     maxBranches,
     baseSelector,
@@ -147,7 +149,10 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
   } = props
   const labels = useMemo(() => ({ ...defaultLabels, ...props.labels }), [props.labels])
   const baseKey = JSON.stringify(baseSelector)
-  const engine = useMemo(() => props.engine ?? createEngine({ schema, values, matchCase, maxBranches, baseSelector }), [props.engine, schema, values, matchCase, maxBranches, baseKey])
+  const [loaded, setLoaded] = useState<FieldValues>({})
+  const [loading, setLoading] = useState<string[]>([])
+  const allValues = useMemo(() => ({ ...values, ...loaded }), [values, loaded])
+  const engine = useMemo(() => props.engine ?? createEngine({ schema, values: allValues, matchCase, maxBranches, baseSelector }), [props.engine, schema, allValues, matchCase, maxBranches, baseKey])
 
   const controlled = value !== undefined
   const [inner, setInner] = useState(defaultValue)
@@ -166,6 +171,10 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
   const pendingCaret = useRef<number | null>(null)
   const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const mountRan = useRef(false)
+  const loader = useRef(loadValues)
+  const requested = useRef(new Set<string>())
+  const loadAbort = useRef<AbortController | null>(null)
+  loader.current = loadValues
 
   const baseId = useId()
   const listId = `${baseId}-list`
@@ -180,6 +189,9 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
   const items = useMemo<Suggestion[]>(() => (sugg ? [...sugg.items, ...sugg.extra] : []), [sugg])
   const open = items.length > 0
   const at = menu ? Math.min(menu.at, items.length - 1) : -1
+  const valueField = sugg?.field
+  const waiting = !!valueField && loading.includes(valueField)
+  const shown = open || waiting
 
   const usable = (text: string) => [...text.matchAll(/(?:^|[\s(`-])([A-Za-z_][A-Za-z0-9_]*):/g)].every((m) => engine.schema.alias.has(m[1].toLowerCase()))
   const shownExamples = examples ?? defaultExamples.filter(usable)
@@ -189,6 +201,33 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
   useEffect(() => {
     if (recent === undefined && recentStorageKey) setStoredRecent(readRecent(recentStorageKey))
   }, [recent, recentStorageKey])
+
+  useEffect(() => {
+    const controller = new AbortController()
+    loadAbort.current = controller
+    requested.current.clear()
+    setLoaded((x) => (Object.keys(x).length ? {} : x))
+    setLoading((x) => (x.length ? [] : x))
+    return () => controller.abort()
+  }, [baseKey])
+
+  useEffect(() => {
+    const load = loader.current
+    const controller = loadAbort.current
+    if (!valueField || !load || !controller || props.engine || requested.current.has(valueField)) return
+    const field = valueField
+    requested.current.add(field)
+    setLoading((x) => [...x, field])
+    const finish = (list?: FieldValue[]) => {
+      if (controller.signal.aborted) return
+      if (Array.isArray(list)) setLoaded((x) => ({ ...x, [field]: list }))
+      else requested.current.delete(field)
+      setLoading((x) => x.filter((f) => f !== field))
+    }
+    Promise.resolve()
+      .then(() => load(field, { signal: controller.signal }))
+      .then(finish, () => finish())
+  }, [valueField, baseKey, props.engine])
 
   useIsoLayoutEffect(() => {
     if (pendingCaret.current === null) return
@@ -203,15 +242,15 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
 
   useIsoLayoutEffect(() => {
     const list = listRef.current
-    if (!open || !list || !('showPopover' in list)) return
+    if (!shown || !list || !('showPopover' in list)) return
     list.setAttribute('popover', 'manual')
     list.showPopover()
-  }, [open])
+  }, [shown])
 
   useIsoLayoutEffect(() => {
     const list = listRef.current
     const anchor = wrapRef.current
-    if (!open || !list || !anchor) return
+    if (!shown || !list || !anchor) return
     const place = () => {
       const box = anchor.getBoundingClientRect()
       const below = window.innerHeight - box.bottom - MENU_GAP * 2
@@ -230,7 +269,7 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
       window.removeEventListener('resize', place)
       window.removeEventListener('scroll', place, true)
     }
-  }, [open, items])
+  }, [shown, items, waiting])
 
   useEffect(() => {
     if (!open || at < 0) return
@@ -321,7 +360,7 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
         if (!running) execute()
       }
     } else if (e.key === 'Escape') {
-      if (open) {
+      if (shown) {
         e.stopPropagation()
         setMenu(null)
       } else {
@@ -424,8 +463,8 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
               ref={inputRef}
               rows={rows}
               role="combobox"
-              aria-expanded={open}
-              aria-controls={open ? listId : undefined}
+              aria-expanded={shown}
+              aria-controls={shown ? listId : undefined}
               aria-activedescendant={open && at >= 0 ? optionId(at) : undefined}
               aria-autocomplete="list"
               aria-label={labels.ariaLabel}
@@ -499,7 +538,7 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
             </div>
           )}
         </div>
-        {open && sugg && (
+        {shown && sugg && (
           <div className="lqb-sugg" ref={listRef} id={listId} role="listbox" aria-label={labels.ariaLabel} onMouseDown={(e) => e.preventDefault()}>
             {sugg.items.length > 0 && (
               <div role="group" aria-label={sugg.head || labels.ariaLabel}>
@@ -519,10 +558,15 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
                 {sugg.extra.map((it, i) => row(it, i + sugg.items.length))}
               </div>
             )}
+            {waiting && (
+              <div className="lqb-sg-h" aria-hidden="true">
+                {labels.loadingValues}
+              </div>
+            )}
           </div>
         )}
         <span className="lqb-sr" aria-live="polite">
-          {open ? labels.suggestionCount(items.length) : ''}
+          {waiting ? labels.loadingValues : open ? labels.suggestionCount(items.length) : ''}
         </span>
       </div>
 

@@ -2,9 +2,11 @@ export interface FieldDef {
   label: string
   kind?: 'label' | 'line'
   indexed?: boolean
+  parsed?: boolean
   aliases?: string[]
   values?: string[]
   synonyms?: Record<string, string>
+  groups?: Record<string, string[]>
   lowercase?: boolean
   color?: 'level' | 'hash' | 'accent' | ((value: string) => string)
   hint?: string
@@ -21,17 +23,19 @@ export interface Schema {
   parser?: LogParser
 }
 
-export interface ResolvedField extends Omit<FieldDef, 'synonyms'> {
+export interface ResolvedField extends Omit<FieldDef, 'synonyms' | 'groups'> {
   name: string
   kind: 'label' | 'line'
   primary: string
   synonyms: Map<string, string>
+  groups: Map<string, string[]>
 }
 
 export interface ResolvedSchema {
   fields: Map<string, ResolvedField>
   alias: Map<string, string>
   lineField: string
+  parsedLine: boolean
   selectorField: string
   excludeExample: string
   parser?: LogParser
@@ -91,18 +95,35 @@ export const defaultSchema: Schema = {
   excludeExample: 'level:debug'
 }
 
+function resolveGroups(field: string, groups: Record<string, string[]> = {}): Map<string, string[]> {
+  const out = new Map<string, string[]>()
+  for (const [key, list] of Object.entries(groups)) {
+    const members = [...new Set(list.filter(Boolean))]
+    if (!members.length) throw new Error(`logql-query-box: group "${key}" on "${field}" has no values.`)
+    for (const value of new Set([key, ...members].map((v) => v.toLowerCase()))) {
+      if (out.has(value)) throw new Error(`logql-query-box: "${value}" is in two groups on "${field}".`)
+      out.set(value, members)
+    }
+  }
+  return out
+}
+
 export function resolveSchema(schema: Schema, baseSelector: Record<string, string> = {}): ResolvedSchema {
   const fields = new Map<string, ResolvedField>()
   const alias = new Map<string, string>()
   let lineField = ''
+  let parsedLine = false
   let firstIndexed = ''
 
   for (const [name, def] of Object.entries(schema.fields)) {
     if (!LABEL_NAME.test(name)) throw new Error(`logql-query-box: "${name}" is not a valid Loki label name.`)
     const kind = def.kind ?? 'label'
+    if (def.parsed && kind !== 'line') throw new Error(`logql-query-box: "parsed" only applies to the line field, not "${name}".`)
+    if (def.parsed && !schema.parser) throw new Error('logql-query-box: a parsed line field needs a schema parser.')
     if (kind === 'line') {
       if (lineField) throw new Error('logql-query-box: a schema can only have one line field.')
       lineField = name
+      parsedLine = !!def.parsed
     } else if (def.indexed && !firstIndexed) {
       firstIndexed = name
     }
@@ -119,7 +140,8 @@ export function resolveSchema(schema: Schema, baseSelector: Record<string, strin
       name,
       kind,
       primary: names[0],
-      synonyms: new Map(Object.entries(def.synonyms ?? {}))
+      synonyms: new Map(Object.entries(def.synonyms ?? {})),
+      groups: resolveGroups(name, def.groups)
     })
   }
 
@@ -137,6 +159,7 @@ export function resolveSchema(schema: Schema, baseSelector: Record<string, strin
     fields,
     alias,
     lineField,
+    parsedLine,
     selectorField,
     excludeExample: schema.excludeExample ?? `${firstLabel ? firstLabel.primary : 'field'}:value`,
     parser: schema.parser,

@@ -73,6 +73,16 @@ export function isNegative(n: QueryNode): boolean {
   return n.type === 'cond' && (n.op === 'neq' || n.op === 'not_in' || n.op === 'not_contains' || n.op === 'not_regex')
 }
 
+export function expandGroups(n: QueryNode, schema: ResolvedSchema): QueryNode {
+  if (n.type === 'group') return { ...n, children: n.children.map((ch) => expandGroups(ch, schema)) }
+  const groups = schema.fields.get(n.field)?.groups
+  if (!groups?.size || !(n.op === 'eq' || n.op === 'neq' || n.op === 'in' || n.op === 'not_in')) return n
+  const values = Array.isArray(n.value) ? n.value : [valOf(n)]
+  const expanded = [...new Set(values.flatMap((v) => groups.get(v.toLowerCase()) ?? [v]))]
+  if (expanded.length === values.length && expanded.every((v, i) => v === values[i])) return n
+  return { ...n, op: isNegative(n) ? 'not_in' : 'in', value: expanded }
+}
+
 function testCond(c: Cond, r: LogRecord, schema: ResolvedSchema, matchCase: boolean): boolean {
   const raw = r[c.field]
   const hay = String(raw == null ? '' : raw)

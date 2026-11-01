@@ -27,6 +27,7 @@ export interface Labels {
   removeFilter: (text: string) => string
   moreFilters: (count: number) => string
   suggestionCount: (count: number) => string
+  loadingValues: string
   savedAndRecent: string
 }
 
@@ -59,6 +60,7 @@ export const defaultLabels: Labels = {
   removeFilter: (text) => `Remove filter ${text}`,
   moreFilters: (count) => `+${count} more`,
   suggestionCount: (count) => `${count} ${count === 1 ? 'suggestion' : 'suggestions'} available`,
+  loadingValues: 'Loading values…',
   savedAndRecent: 'Saved and recent'
 }
 

@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { createEngine, defaultSchema, logqlString, MAX_BRANCHES, type QueryNode, type Schema } from '../src/core'
+import { createEngine, defaultSchema, logqlString, MAX_BRANCHES, type Cond, type Group, type QueryNode, type Schema } from '../src/core'
 import { makeEngine, strip } from './helpers'
 
 const engine = makeEngine()
@@ -508,7 +508,7 @@ describe('schema parser', () => {
 
   it('produces the query verified on real Loki for JSON logs', () => {
     expect(logql('level:error app:checkout-* timeout -debug')).toEqual([
-      '{index="loki_21_july"}\n  |~ "(?i)timeout"\n  !~ "(?i)debug"\n  | json | __error__=""\n  | logLevel="ERROR"\n  | serviceName=~"^(?:checkout-.*)$"'
+      '{index="loki_21_july"}\n  |~ "(?i)timeout"\n  !~ "(?i)debug"\n  | json logLevel, serviceName | __error__=""\n  | logLevel="ERROR"\n  | serviceName=~"^(?:checkout-.*)$"'
     ])
   })
 
@@ -518,7 +518,7 @@ describe('schema parser', () => {
   })
 
   it('adds the parser once, only to the branches that need it', () => {
-    expect(logql('timeout OR level:error')).toEqual(['{index="loki_21_july"}\n  |~ "(?i)timeout"', '{index="loki_21_july"}\n  | json | __error__=""\n  | logLevel="ERROR"'])
+    expect(logql('timeout OR level:error')).toEqual(['{index="loki_21_july"}\n  |~ "(?i)timeout"', '{index="loki_21_july"}\n  | json logLevel | __error__=""\n  | logLevel="ERROR"'])
     expect(logql('level:error app:a').join('').match(/\| json/g)).toHaveLength(1)
   })
 
@@ -545,6 +545,209 @@ describe('schema parser', () => {
     const a = e.analyze('level:error timeout')
     expect(e.evaluate(a.tree, { logLevel: 'ERROR', content: 'a timeout' })).toBe(true)
     expect(e.evaluate(a.tree, { logLevel: 'INFO', content: 'a timeout' })).toBe(false)
+  })
+})
+
+describe('one query for OR when a parser is set', () => {
+  const schema: Schema = {
+    parser: 'json',
+    fields: {
+      logLevel: { label: 'Log Level', aliases: ['level'], values: ['ERROR', 'WARN', 'INFO'] },
+      serviceName: { label: 'App Name', aliases: ['app'] },
+      content: { label: 'Content', kind: 'line', aliases: ['msg'] }
+    }
+  }
+  const e = createEngine({ schema, baseSelector: { index: 'a' } })
+  const logql = (q: string) => e.analyze(q).logql.branches
+
+  it('keeps OR between fields in one query', () => {
+    expect(logql('level:error OR app:billing')).toEqual(['{index="a"}\n  | json logLevel, serviceName | __error__=""\n  | logLevel="ERROR" or serviceName="billing"'])
+  })
+
+  it('brackets groups inside an OR', () => {
+    expect(logql('(level:error app:a) OR app:b')).toEqual(['{index="a"}\n  | json logLevel, serviceName | __error__=""\n  | (logLevel="ERROR" and serviceName="a") or serviceName="b"'])
+  })
+
+  it('writes one stage for each AND part', () => {
+    expect(logql('(level:error OR app:a) (level:warn OR app:b)')).toEqual(['{index="a"}\n  | json logLevel, serviceName | __error__=""\n  | logLevel="ERROR" or serviceName="a"\n  | logLevel="WARN" or serviceName="b"'])
+  })
+
+  it('joins plain words into one line filter', () => {
+    expect(logql('timeout OR refused')).toEqual(['{index="a"}\n  |~ "(?i)timeout|refused"'])
+    expect(logql('level:error (timeout OR refused)')).toEqual(['{index="a"}\n  |~ "(?i)timeout|refused"\n  | json logLevel | __error__=""\n  | logLevel="ERROR"'])
+  })
+
+  it('keeps a regex and its flags inside their own group', () => {
+    expect(logql('/(?-i)Foo/ OR bar')).toEqual(['{index="a"}\n  |~ "(?i)(?:(?-i)Foo)|bar"'])
+  })
+
+  it('splits into branches when raw line text and a field share an OR', () => {
+    expect(logql('timeout OR level:error')).toHaveLength(2)
+  })
+
+  it('splits into branches when an OR excludes a word', () => {
+    expect(logql('-timeout OR refused')).toHaveLength(2)
+  })
+
+  it('has no branch limit in one query', () => {
+    const q = Array.from({ length: 40 }, (_, i) => `app:a${i}`).join(' OR ')
+    const a = e.analyze(q)
+    expect(a.error).toBeNull()
+    expect(a.logql.branches).toHaveLength(1)
+  })
+
+  it('still limits queries that need branches', () => {
+    const q = Array.from({ length: 13 }, (_, i) => `word${i}`).join(' OR ') + ' OR level:error'
+    expect(e.analyze(q).logql.tooMany).toBe(true)
+  })
+
+  it('never changes the default schema', () => {
+    expect(makeEngine().analyze('timeout OR refused').logql.branches).toHaveLength(2)
+  })
+
+  it('filters stream labels in the pipeline when they share an OR', () => {
+    const indexed = createEngine({ schema: { ...schema, fields: { ...schema.fields, serviceName: { label: 'App', aliases: ['app'], indexed: true } } } })
+    expect(indexed.analyze('app:a OR level:error').logql.branches).toEqual(['{serviceName=~".+"}\n  | json logLevel | __error__=""\n  | serviceName="a" or logLevel="ERROR"'])
+  })
+})
+
+describe('parsed line field', () => {
+  const schema: Schema = {
+    parser: 'json',
+    fields: {
+      logLevel: { label: 'Log Level', aliases: ['level'], values: ['ERROR', 'WARN', 'INFO'] },
+      content: { label: 'Content', kind: 'line', parsed: true, aliases: ['msg'] }
+    }
+  }
+  const e = createEngine({ schema, baseSelector: { index: 'a' } })
+  const logql = (q: string) => e.analyze(q).logql.branches
+
+  it('searches the field after a fast raw filter', () => {
+    expect(logql('timeout')).toEqual(['{index="a"}\n  |~ "(?i)timeout"\n  | json content | __error__=""\n  | content=~"(?is).*timeout.*"'])
+  })
+
+  it('keeps a word and a field in one query', () => {
+    expect(logql('timeout OR level:error')).toEqual(['{index="a"}\n  | json content, logLevel | __error__=""\n  | content=~"(?is).*timeout.*" or logLevel="ERROR"'])
+  })
+
+  it('uses one raw filter for an OR of words', () => {
+    expect(logql('timeout OR refused')).toEqual(['{index="a"}\n  |~ "(?i)timeout|refused"\n  | json content | __error__=""\n  | content=~"(?is).*timeout.*" or content=~"(?is).*refused.*"'])
+  })
+
+  it('has no raw filter for an excluded word', () => {
+    expect(logql('-debug')).toEqual(['{index="a"}\n  | json content | __error__=""\n  | content!~"(?is).*debug.*"'])
+  })
+
+  it.each(['"said \\"hi"', '"C:\\\\temp"', 'a/b', 'caf\u00e9', '"a&b"', '"a+b"', '"tab\there"'])('has no raw filter when encoders may escape %s', (q) => {
+    expect(logql(q)[0]).not.toContain('|~')
+  })
+
+  it('has no raw filter for a regex', () => {
+    expect(logql('/time.ut/')).toEqual(['{index="a"}\n  | json content | __error__=""\n  | content=~"(?i)^(?s:.*)(?:time.ut)(?s:.*)$"'])
+  })
+
+  it('keeps inline regex flags local', () => {
+    expect(logql('/(?-i)Foo/')[0]).toContain('content=~"(?i)^(?s:.*)(?:(?-i)Foo)(?s:.*)$"')
+  })
+
+  it('follows matchCase', () => {
+    const exact = createEngine({ schema, baseSelector: { index: 'a' }, matchCase: true })
+    expect(exact.analyze('Timeout').logql.branches).toEqual(['{index="a"}\n  |~ "Timeout"\n  | json content | __error__=""\n  | content=~"(?s).*Timeout.*"'])
+  })
+
+  it('keeps the full parser for logfmt', () => {
+    const logfmt = createEngine({ schema: { ...schema, parser: 'logfmt' }, baseSelector: { index: 'a' } })
+    expect(logfmt.analyze('timeout').logql.branches[0]).toContain('| logfmt | __error__=""')
+  })
+
+  it('evaluates the field value', () => {
+    const a = e.analyze('timeout')
+    expect(e.evaluate(a.tree, { content: 'a timeout' })).toBe(true)
+    expect(e.evaluate(a.tree, { content: 'all good' })).toBe(false)
+  })
+
+  it('needs a parser', () => {
+    expect(() => createEngine({ schema: { fields: { a: { label: 'A', indexed: true }, b: { label: 'B', kind: 'line', parsed: true } } } })).toThrow('needs a schema parser')
+  })
+
+  it('only applies to the line field', () => {
+    expect(() => createEngine({ schema: { parser: 'json', fields: { a: { label: 'A', parsed: true }, b: { label: 'B', kind: 'line' } } }, baseSelector: { index: 'a' } })).toThrow('only applies to the line field')
+  })
+})
+
+describe('value groups', () => {
+  const schema: Schema = {
+    parser: 'json',
+    fields: {
+      logLevel: {
+        label: 'Log Level',
+        aliases: ['level'],
+        values: ['ERROR', 'WARN', 'WARNING', 'INFO'],
+        groups: { WARN: ['WARN', 'WARNING'], problem: ['ERROR', 'FATAL'] }
+      },
+      content: { label: 'Content', kind: 'line' }
+    }
+  }
+  const e = createEngine({ schema, baseSelector: { index: 'a' } })
+
+  it('expands a value into its whole group', () => {
+    expect(e.analyze('level:warn').logql.branches[0]).toContain('| logLevel=~"WARN|WARNING"')
+  })
+
+  it('works from any member', () => {
+    expect(e.analyze('level:warning').logql.branches[0]).toContain('| logLevel=~"WARN|WARNING"')
+  })
+
+  it('accepts a group name that is not a stored value', () => {
+    expect(e.analyze('level:problem').logql.branches[0]).toContain('| logLevel=~"ERROR|FATAL"')
+  })
+
+  it('expands excluded values', () => {
+    expect(e.analyze('-level:warn').logql.branches[0]).toContain('| logLevel!~"WARN|WARNING"')
+  })
+
+  it('expands inside lists without repeating values', () => {
+    expect(e.analyze('level:warn,warning,info').logql.branches[0]).toContain('| logLevel=~"WARN|WARNING|INFO"')
+  })
+
+  it('leaves wildcards alone', () => {
+    expect(e.analyze('level:w*').logql.branches[0]).toContain('logLevel=~"^(?:w.*)$"')
+  })
+
+  it('keeps the text the person typed in chips and facets', () => {
+    const a = e.analyze('level:warn')
+    expect(e.chipText(a.parsed.children[0])).toBe('Log Level is WARN')
+    expect([...e.activeValues('level:warn', 'logLevel')]).toEqual(['WARN'])
+  })
+
+  it('expands for evaluate and the API filter', () => {
+    const a = e.analyze('level:warn')
+    expect(e.evaluate(a.tree, { logLevel: 'WARNING' })).toBe(true)
+    expect(e.evaluate(a.tree, { logLevel: 'INFO' })).toBe(false)
+    expect(a.filter).toEqual({ logic: 'AND', filters: [{ field: 'logLevel', operator: 'in', value: ['WARN', 'WARNING'] }] })
+  })
+
+  it('does not change a parsed tree', () => {
+    const parsed = e.parse('level:warn')
+    e.activeTree(parsed.root as Group)
+    expect((parsed.children[0] as Cond).value).toBe('WARN')
+  })
+
+  it('rejects a value in two groups', () => {
+    expect(() => createEngine({ schema: { ...schema, fields: { ...schema.fields, logLevel: { label: 'L', groups: { a: ['x', 'y'], b: ['Y'] } } } }, baseSelector: { index: 'a' } })).toThrow('in two groups')
+  })
+
+  it('rejects an empty group', () => {
+    expect(() => createEngine({ schema: { ...schema, fields: { ...schema.fields, logLevel: { label: 'L', groups: { a: [] } } } }, baseSelector: { index: 'a' } })).toThrow('has no values')
+  })
+})
+
+describe('field on a value suggestion list', () => {
+  it('names the field only while a value is being picked', () => {
+    const e = makeEngine()
+    expect(e.suggest('app:', 4).field).toBe('service_name')
+    expect(e.suggest('', 0).field).toBeUndefined()
+    expect(e.suggest('ap', 2).field).toBeUndefined()
   })
 })
 

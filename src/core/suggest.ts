@@ -101,7 +101,7 @@ export function suggest(src: string, caret: number, schema: ResolvedSchema, know
         text: `${neg}${m[1]}:${prior}${quoteValue(o.v)} `
       })
     }
-    return { head: `Values for ${field.label}`, items, extra: [] }
+    return { head: `Values for ${field.label}`, field: name, items, extra: [] }
   }
 
   if (body) {
