@@ -1,0 +1,62 @@
+{
+  "name": "logql-query-box",
+  "version": "0.1.0",
+  "description": "A React query box for Grafana Loki: a friendly search language that compiles to LogQL, with suggestions, chips, validation and a headless engine.",
+  "license": "MIT",
+  "author": "Darshan R",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/darshanraj046/logql-query-box.git"
+  },
+  "homepage": "https://github.com/darshanraj046/logql-query-box#readme",
+  "bugs": "https://github.com/darshanraj046/logql-query-box/issues",
+  "keywords": ["logql", "loki", "grafana", "react", "query-builder", "log-search", "logs", "search-box"],
+  "type": "module",
+  "sideEffects": ["**/*.css"],
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+      "require": { "types": "./dist/index.d.cts", "default": "./dist/index.cjs" }
+    },
+    "./core": {
+      "import": { "types": "./dist/core.d.ts", "default": "./dist/core.js" },
+      "require": { "types": "./dist/core.d.cts", "default": "./dist/core.cjs" }
+    },
+    "./styles.css": "./dist/styles.css",
+    "./package.json": "./package.json"
+  },
+  "files": ["dist", "README.md", "LICENSE", "CHANGELOG.md"],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:loki": "vitest run --config vitest.loki.config.ts",
+    "golden": "node scripts/generate-golden.mjs",
+    "dev": "vite demo --port 5199",
+    "check": "npm run typecheck && npm test && npm run build"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0"
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.8",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "jsdom": "^30.1.3",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tsup": "^9.0.0",
+    "typescript": "^5.9.0",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
+  }
+}

@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+        react: [18, 19]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+        if: matrix.react == 19
+      - name: Use React ${{ matrix.react }}
+        if: matrix.react == 18
+        run: npm install --no-save react@18 react-dom@18
+      - run: npm test
+      - name: Check the committed build is current
+        if: matrix.react == 19
+        run: |
+          npm run build
+          git diff --exit-code dist
+
+  loki:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Start Loki
+        run: |
+          docker run -d --name loki --network host \
+            -v "$PWD/test/loki/loki-test.yaml:/etc/loki/test.yaml:ro" \
+            grafana/loki:3.5.0 -config.file=/etc/loki/test.yaml -config.expand-env=true
+      - run: npm run test:loki
+      - name: Loki logs
+        if: failure()
+        run: docker logs loki
