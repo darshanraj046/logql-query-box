@@ -66,6 +66,7 @@
     "golden": "node scripts/generate-golden.mjs",
     "record": "node scripts/record-demo.mjs",
     "dev": "vite demo --port 5199",
+    "demo:build": "vite build demo --base=/logql-query-box/ --outDir ../site --emptyOutDir",
     "check": "npm run typecheck && npm test && npm run build",
     "prepublishOnly": "npm run check"
   },

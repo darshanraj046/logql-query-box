@@ -2,6 +2,8 @@
 
 A React query box for [Grafana Loki](https://grafana.com/oss/loki/). People type a friendly search language, and you get validated [LogQL](https://grafana.com/docs/loki/latest/query/) back.
 
+**[Try the live demo](https://darshanraj046.github.io/logql-query-box/)** in your browser, with nothing to install.
+
 ```text
 level:error,warn app:checkout-* timeout -debug
 ```
