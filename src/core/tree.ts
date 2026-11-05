@@ -105,9 +105,9 @@ function testCond(c: Cond, r: LogRecord, schema: ResolvedSchema, matchCase: bool
     case 'ends':
       return H.length >= N(v).length && H.slice(H.length - N(v).length) === N(v)
     case 'regex':
-      return isRiskyRegex(v) || toJsRegex(v, ci, !isLine).test(hay)
+      return isRiskyRegex(v) || toJsRegex(v, ci, !isLine && !c.anywhere).test(hay)
     case 'not_regex':
-      return isRiskyRegex(v) || !toJsRegex(v, ci, !isLine).test(hay)
+      return isRiskyRegex(v) || !toJsRegex(v, ci, !isLine && !c.anywhere).test(hay)
     case 'in':
       return isLine ? listOf(c).some((x) => H.indexOf(N(x)) >= 0) : listOf(c).indexOf(hay) >= 0
     case 'not_in':

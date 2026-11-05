@@ -129,6 +129,8 @@ function App() {
           engine={engine}
           defaultValue="level:error,warn timeout"
           defaultLogqlOpen
+          showLogql
+          showHelp
           executeOnMount
           description={false}
           globalShortcuts

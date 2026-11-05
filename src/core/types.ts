@@ -25,6 +25,7 @@ export interface Cond {
   value: string | string[]
   spans?: Span[]
   parts?: ValuePart[]
+  anywhere?: boolean
 }
 
 export interface Group {
@@ -79,6 +80,15 @@ export interface Analysis {
   logql: CompileResult
   filter: ApiFilter | null
   riskyRegex: boolean
+  unknownValues: UnknownValue[]
+}
+
+export interface UnknownValue {
+  field: string
+  value: string
+  negative: boolean
+  matches: string[]
+  regex?: boolean
 }
 
 export interface SavedQuery {
@@ -89,7 +99,7 @@ export interface SavedQuery {
 }
 
 export interface Suggestion {
-  kind: 'field' | 'value' | 'saved' | 'recent'
+  kind: 'field' | 'value' | 'saved' | 'recent' | 'operator'
   label: string
   hint?: string
   sub?: string
@@ -97,6 +107,7 @@ export interface Suggestion {
   replace?: [number, number]
   text?: string
   keep?: boolean
+  caret?: number
   whole?: string
 }
 
@@ -105,6 +116,8 @@ export interface SuggestionList {
   field?: string
   items: Suggestion[]
   extra: Suggestion[]
+  extraHead?: string
+  note?: string
 }
 
 export interface SuggestExtras {

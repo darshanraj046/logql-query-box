@@ -90,9 +90,19 @@ export function parse(src: string, schema: ResolvedSchema, known: Map<string, Ma
     const neg = !!t.neg
     if (f == null || f === schema.lineField) {
       if (t.kind === 'regex') return C(schema.lineField, neg ? 'not_regex' : 'regex', t.value as string)
-      return C(schema.lineField, neg ? 'not_contains' : 'contains', t.value as string)
+      const v = t.value as string
+      if (schema.operator === '=' && f === schema.lineField && t.kind === 'word' && v.includes('*')) {
+        const pieces = v.replace(/^\*+|\*+$/g, '').split(/\*+/)
+        if (pieces.length > 1) return C(schema.lineField, neg ? 'not_regex' : 'regex', pieces.map(reEsc).join('.*'))
+        return C(schema.lineField, neg ? 'not_contains' : 'contains', pieces[0])
+      }
+      return C(schema.lineField, neg ? 'not_contains' : 'contains', v)
     }
-    if (t.kind === 'regex') return C(f, neg ? 'not_regex' : 'regex', t.value as string)
+    if (t.kind === 'regex') {
+      const c = C(f, neg ? 'not_regex' : 'regex', t.value as string)
+      if (schema.operator === '=') c.anywhere = true
+      return c
+    }
     const parts: ValuePart[] = []
     const seen = new Set<string>()
     for (const part of t.parts as ValuePart[]) {

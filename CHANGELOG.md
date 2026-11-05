@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.4.0
+
+Added:
+
+- `variant="bar"`: a one line filter bar that grows into an editor over the page once it holds a query, with clear and copy buttons, field name highlighting, and Run query beside it.
+- An embedded Queries panel in the bar: count badge, search, pinned and all saved groups, and hover actions through `onSelectSaved`, `onPinSaved`, `onEditSaved`, `onDeleteSaved` and `onCreateAlert`. Also `savedCount`, `savedLoading`, `onSavedSearch`, `showQueries`, `showRun`, and `openQueries()` and `closeQueries()` on the handle.
+- `operator: '='` on the schema for `level = ERROR,WARN`, `level != DEBUG` and `content = *text*`. Aliases may contain dots, such as `app.type`.
+- `=~` and `!~` with `operator: '='` for regular expressions, such as `app =~ security` and `content !~ debug`. In `=` mode a field regex matches anywhere in the value, like grep, and `^` or `$` anchor it. In `:` mode field regexes still match the whole value. A comma list may also have spaces before the comma.
+- A guided flow in `=` mode: field, then an operator in plain words, then values. Values that contain the typed text follow the ones that start with it, a `*text*` row offers "every app containing text", content and regex operators show a note on what to type, and picking a value goes back to the field list. New `SuggestionList` fields: `extraHead`, `note`, and the `operator` suggestion kind.
+- Running a query in `=` mode merges repeated filters on the same field, through the new `engine.combine(query)`.
+- `analysis.unknownValues`: values that match no known value, with close matches. The box shows them after a run with one-click fixes, through the new `engine.replaceValue()`. Labels: `unknownValue`, `containing`.
+- `onSaveQuery`: a built in "Save query as" popover with a generated name, a pin checkbox and a preview. `onUpdateSaved`: inline edit of a saved query inside the Queries panel. Both show "Saving…" while a returned promise runs and keep the form open with the error if it rejects.
+- Field patterns: after `=~` or `!~`, anchor rows for starts with, ends with and is exactly, with the caret placed inside; a live note shows which known values the pattern matches; a pattern that matches nothing gets fixes after a run (`UnknownValue.regex`, `Suggestion.caret`).
+- Deleting a saved query asks inside the row first, and a rejected `onDeleteSaved` promise shows its message there.
+- `showValueCounts` to hide line counts in value suggestions.
+- `classNames` for slot classes, and bar CSS variables.
+
+Fixed:
+
+- Clicking Queries no longer expands or highlights the bar. Only the text box counts as editing.
+- In `=` mode, Enter while picking a value ran the half typed value instead of accepting the highlighted suggestion.
+
+Changed:
+
+- `showHelp` and `showLogql` now default to `false`. Pass them to get the Search help link and the LogQL toggle back.
+
+Without `operator: '='`, parsing and compiled queries are identical to 0.3.0.
+
 ## 0.3.0
 
 Added:

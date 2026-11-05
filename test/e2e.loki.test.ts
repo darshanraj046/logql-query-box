@@ -244,6 +244,62 @@ describe('JSON logs under one stream label against a real Loki', () => {
     expect(rows.sort((x, y) => x - y)).toEqual(multi)
   })
 
+  it.each([
+    ['case insensitive', false, 61],
+    ['match case', true, 62]
+  ] as const)('operator "=", %s, returns exactly the rows evaluate() picks', async (_name, matchCase, seed) => {
+    const eqSchema: Schema = {
+      parser: 'json',
+      operator: '=',
+      fields: {
+        logLevel: { label: 'level', aliases: ['level'], values: ['error', 'info', 'warn', 'debug', 'unknown'] },
+        serviceName: { label: 'app', aliases: ['app'] },
+        serviceCategory: { label: 'app.type', aliases: ['app.type'], values: ['JAVA', 'PYTHON', 'GO'] },
+        content: { label: 'content', kind: 'line', parsed: true, aliases: ['content'] }
+      }
+    }
+    const engine = createEngine({ schema: eqSchema, baseSelector: { index }, matchCase, values: appValues })
+    const terms = [
+      'app =~ service', 'app =~ ^auth', 'app =~ api$', 'app =~ ^checkout-api$', 'app !~ service', 'app =~ (checkout|billing)-', 'app =~ ledger\\.sync',
+      'app = /work/', 'app = checkout-*', 'app = *-service', 'app = *e*', 'app != auth-service', 'app = checkout-api, auth-service',
+      'app.type != JAVA', 'app.type != JAVA,GO', 'app.type =~ ^P', 'app.type !~ o',
+      'level = error,warn', 'level != debug', 'level =~ ^(error|warn)$', 'level !~ n',
+      'content = *timeout*', 'content = conn*refused', 'content != *retry*', 'content =~ time(out|d)', 'content !~ \\d', 'content = "hello world"', 'content =~ order\\.total'
+    ]
+    const r = rng(seed)
+    const pick = () => terms[Math.floor(r() * terms.length)]
+    const queries: string[] = [...terms]
+    while (queries.length < 600) {
+      const a = pick()
+      const b = pick()
+      const c = pick()
+      const shape = Math.floor(r() * 4)
+      queries.push(shape === 0 ? `${a} ${b}` : shape === 1 ? `(${a} OR ${b}) ${c}` : shape === 2 ? `-(${a}) ${b}` : `${a}\n${b} ${c}`)
+    }
+    const failures: string[] = []
+    let executed = 0
+    await pool(queries, 12, async (q) => {
+      const a = engine.analyze(q)
+      if (a.error) return
+      executed++
+      const expected = stored.filter((row) => engine.evaluate(a.tree, { logLevel: row.logLevel, serviceName: row.serviceName, serviceCategory: row.serviceCategory, content: row.content })).map((row) => row.id).sort((x, y) => x - y)
+      try {
+        const got = new Set<number>()
+        for (const branch of a.logql.branches) for (const id of await runJson(branch)) got.add(id)
+        const actual = [...got].sort((x, y) => x - y)
+        if (JSON.stringify(actual) !== JSON.stringify(expected)) failures.push(`${JSON.stringify(q)} loki=${actual.length} local=${expected.length} logql=${JSON.stringify(a.logql.branches)}`)
+      } catch (e) {
+        failures.push(`${JSON.stringify(q)} ${(e as Error).message}`)
+      }
+    })
+    console.log(`operator = ${_name}: ${executed} of ${queries.length} queries executed, ${failures.length} failures`)
+    expect(failures.slice(0, 12).join('\n')).toBe('')
+    expect(executed).toBeGreaterThan(500)
+    const single = (q: string) => stored.filter((row) => engine.evaluate(engine.analyze(q).tree, { serviceName: row.serviceName })).length
+    expect(single('app =~ service')).toBeGreaterThan(0)
+    expect(single('app =~ service')).toBeLessThan(stored.length)
+  })
+
   it('a value group finds every stored spelling', async () => {
     const rows = await runJson(parsedEngineFor(false).analyze('level:warn').logql.branches[0])
     expect(rows.sort((x, y) => x - y)).toEqual(stored.filter((row) => row.logLevel === 'warn' || row.logLevel === 'unknown').map((row) => row.id))

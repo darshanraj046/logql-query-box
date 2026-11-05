@@ -15,7 +15,7 @@ function setup(props: LogQLQueryBoxProps = {}) {
   const onExecute = vi.fn()
   const onChange = vi.fn()
   const user = userEvent.setup()
-  const view = render(<LogQLQueryBox values={engineValues} recentStorageKey={null} onExecute={onExecute} onChange={onChange} {...props} />)
+  const view = render(<LogQLQueryBox showHelp showLogql values={engineValues} recentStorageKey={null} onExecute={onExecute} onChange={onChange} {...props} />)
   return { user, onExecute, onChange, ...view }
 }
 
@@ -509,7 +509,7 @@ describe('LogQL panel', () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     const user = userEvent.setup()
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
-    render(<LogQLQueryBox defaultValue="a" defaultLogqlOpen recentStorageKey={null} />)
+    render(<LogQLQueryBox defaultValue="a" defaultLogqlOpen showLogql recentStorageKey={null} />)
     await user.click(screen.getByRole('button', { name: 'Copy' }))
     expect(writeText).toHaveBeenCalledWith('{service_name=~".+"}\n  |~ "(?i)a"')
     expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument()
@@ -519,7 +519,7 @@ describe('LogQL panel', () => {
     const user = userEvent.setup()
     Object.defineProperty(navigator, 'clipboard', { value: { writeText: vi.fn().mockRejectedValue(new Error('denied')) }, configurable: true })
     document.execCommand = vi.fn().mockReturnValue(true)
-    render(<LogQLQueryBox defaultValue="a" defaultLogqlOpen recentStorageKey={null} />)
+    render(<LogQLQueryBox defaultValue="a" defaultLogqlOpen showLogql recentStorageKey={null} />)
     await user.click(screen.getByRole('button', { name: 'Copy' }))
     expect(await screen.findByRole('button', { name: 'Copied' })).toBeInTheDocument()
     expect(document.execCommand).toHaveBeenCalledWith('copy')
@@ -529,7 +529,7 @@ describe('LogQL panel', () => {
     const user = userEvent.setup()
     Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true })
     document.execCommand = vi.fn().mockReturnValue(false)
-    render(<LogQLQueryBox defaultValue="a" defaultLogqlOpen recentStorageKey={null} />)
+    render(<LogQLQueryBox defaultValue="a" defaultLogqlOpen showLogql recentStorageKey={null} />)
     await user.click(screen.getByRole('button', { name: 'Copy' }))
     expect(await screen.findByRole('button', { name: 'Copy failed' })).toBeInTheDocument()
   })
@@ -538,7 +538,7 @@ describe('LogQL panel', () => {
     const writeText = vi.fn().mockResolvedValue(undefined)
     const user = userEvent.setup()
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true })
-    const { unmount } = render(<LogQLQueryBox defaultValue="a" defaultLogqlOpen recentStorageKey={null} />)
+    const { unmount } = render(<LogQLQueryBox defaultValue="a" defaultLogqlOpen showLogql recentStorageKey={null} />)
     await user.click(screen.getByRole('button', { name: 'Copy' }))
     unmount()
   })
@@ -1095,14 +1095,14 @@ describe('baseSelector prop', () => {
   it('updates when the index changes', () => {
     const { rerender } = setup({ baseSelector: { index: 'one' }, defaultLogqlOpen: true })
     expect(pre()).toHaveTextContent('{index="one"}')
-    rerender(<LogQLQueryBox baseSelector={{ index: 'two' }} defaultLogqlOpen recentStorageKey={null} />)
+    rerender(<LogQLQueryBox baseSelector={{ index: 'two' }} defaultLogqlOpen showLogql recentStorageKey={null} />)
     expect(pre()).toHaveTextContent('{index="two"}')
   })
 
   it('accepts a new object with the same value on every render', () => {
     const { rerender } = setup({ baseSelector: { index: 'one' }, defaultValue: 'x', defaultLogqlOpen: true })
     const first = pre()?.textContent
-    rerender(<LogQLQueryBox baseSelector={{ index: 'one' }} defaultValue="x" defaultLogqlOpen recentStorageKey={null} />)
+    rerender(<LogQLQueryBox baseSelector={{ index: 'one' }} defaultValue="x" defaultLogqlOpen showLogql recentStorageKey={null} />)
     expect(pre()?.textContent).toBe(first)
   })
 
@@ -1269,7 +1269,7 @@ describe('resilience', () => {
   it('renders every fuzz shaped query without crashing', async () => {
     const samples = ['constructor:x', '__proto__', '()', '-(', '(((', ')))', '"', '/', '\\', ',', ':', '*', '\u0000', '-(a OR b)', 'app:*']
     for (const q of samples) {
-      const { unmount } = render(<LogQLQueryBox defaultValue={q} defaultLogqlOpen recentStorageKey={null} />)
+      const { unmount } = render(<LogQLQueryBox defaultValue={q} defaultLogqlOpen showLogql recentStorageKey={null} />)
       await waitFor(() => expect(box()).toHaveValue(q))
       unmount()
     }

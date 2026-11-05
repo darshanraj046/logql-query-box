@@ -25,5 +25,6 @@ export type {
   Suggestion,
   SuggestionList,
   Token,
+  UnknownValue,
   ValuePart
 } from './types'

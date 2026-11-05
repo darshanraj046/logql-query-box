@@ -19,6 +19,7 @@ interface Schema {
     selectorField?: string;
     excludeExample?: string;
     parser?: LogParser;
+    operator?: ':' | '=';
 }
 interface ResolvedField extends Omit<FieldDef, 'synonyms' | 'groups'> {
     name: string;
@@ -35,6 +36,7 @@ interface ResolvedSchema {
     selectorField: string;
     excludeExample: string;
     parser?: LogParser;
+    operator: ':' | '=';
     baseSelector: [string, string][];
 }
 declare const defaultSchema: Schema;
@@ -54,6 +56,7 @@ interface Cond {
     value: string | string[];
     spans?: Span[];
     parts?: ValuePart[];
+    anywhere?: boolean;
 }
 interface Group {
     id: number;
@@ -105,6 +108,14 @@ interface Analysis {
     logql: CompileResult;
     filter: ApiFilter | null;
     riskyRegex: boolean;
+    unknownValues: UnknownValue[];
+}
+interface UnknownValue {
+    field: string;
+    value: string;
+    negative: boolean;
+    matches: string[];
+    regex?: boolean;
 }
 interface SavedQuery {
     id?: string;
@@ -113,7 +124,7 @@ interface SavedQuery {
     pinned?: boolean;
 }
 interface Suggestion {
-    kind: 'field' | 'value' | 'saved' | 'recent';
+    kind: 'field' | 'value' | 'saved' | 'recent' | 'operator';
     label: string;
     hint?: string;
     sub?: string;
@@ -121,6 +132,7 @@ interface Suggestion {
     replace?: [number, number];
     text?: string;
     keep?: boolean;
+    caret?: number;
     whole?: string;
 }
 interface SuggestionList {
@@ -128,6 +140,8 @@ interface SuggestionList {
     field?: string;
     items: Suggestion[];
     extra: Suggestion[];
+    extraHead?: string;
+    note?: string;
 }
 interface SuggestExtras {
     saved?: SavedQuery[];
@@ -164,6 +178,8 @@ interface Engine {
     appendTerm(query: string, field: string, values: string[], negative?: boolean): string;
     toggleValue(query: string, field: string, value: string, negative?: boolean): string;
     clearField(query: string, field: string): string;
+    combine(query: string): string;
+    replaceValue(query: string, field: string, from: string, to: string, negative?: boolean): string;
     activeValues(query: string, field: string, negative?: boolean): Set<string>;
 }
 declare function createEngine(options?: EngineOptions): Engine;
@@ -191,4 +207,4 @@ declare function listOf(c: Cond): string[];
 declare function valOf(c: Cond): string;
 
 export { INVALID_REGEX, MAX_BRANCHES, MAX_DEPTH, UNSUPPORTED_REGEX, chipLabel, chipText, createEngine, defaultSchema, isRiskyRegex, listOf, logqlString, quoteValue, reEsc, regexProblem, resolveSchema, toJsRegex, tokenize, valOf };
-export type { Analysis, ApiFilter, CompileResult, Cond, Engine, EngineOptions, FieldDef, FieldValue, FieldValues, Group, LogParser, LogRecord, Op, ParseResult, QueryNode, ResolvedField, ResolvedSchema, SavedQuery, Schema, Span, SuggestExtras, Suggestion, SuggestionList, Token, ValuePart };
+export type { Analysis, ApiFilter, CompileResult, Cond, Engine, EngineOptions, FieldDef, FieldValue, FieldValues, Group, LogParser, LogRecord, Op, ParseResult, QueryNode, ResolvedField, ResolvedSchema, SavedQuery, Schema, Span, SuggestExtras, Suggestion, SuggestionList, Token, UnknownValue, ValuePart };

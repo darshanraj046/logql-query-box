@@ -1,7 +1,8 @@
 import type { ResolvedSchema } from './schema'
 import type { Span, Token, TokenizeResult, ValuePart } from './types'
 
-const FIELD = /([A-Za-z_][A-Za-z0-9_]*):/y
+const FIELD = /([A-Za-z_][A-Za-z0-9_.]*):/y
+const FIELD_EQ = /([A-Za-z_][A-Za-z0-9_.]*)\s*(!=|!~|=~|=|:)\s*/y
 const WORD = /[^\s()]*/y
 const LIST_ITEM = /[^\s(),]*/y
 const SPACE = /\s/
@@ -81,15 +82,19 @@ export function tokenize(src: string, schema: ResolvedSchema): TokenizeResult {
       i++
       continue
     }
-    FIELD.lastIndex = i
-    const m = FIELD.exec(src)
+    const eq = schema.operator === '='
+    const fieldRe = eq ? FIELD_EQ : FIELD
+    fieldRe.lastIndex = i
+    const m = fieldRe.exec(src)
     const known = m ? schema.alias.get(m[1].toLowerCase()) : undefined
+    const rx = !!m && !!known && (m[2] === '=~' || m[2] === '!~')
     if (m && known) {
       field = known
       i += m[0].length
+      if (m[2] === '!=' || m[2] === '!~') neg = !neg
     }
 
-    if (field && field !== schema.lineField && !(src[i] === '/' && regexEndAt(src, i) > 0)) {
+    if (field && field !== schema.lineField && !rx && !(src[i] === '/' && regexEndAt(src, i) > 0)) {
       const parts: ValuePart[] = []
       const quotes: Span[] = []
       while (i < n) {
@@ -104,8 +109,21 @@ export function tokenize(src: string, schema: ResolvedSchema): TokenizeResult {
           if (bare) parts.push({ v: bare, wild: bare.includes('*') })
           i += bare.length
         }
+        if (eq && src[i] !== ',') {
+          let j = i
+          while (j < n && SPACE.test(src[j])) j++
+          if (src[j] === ',') i = j
+        }
         if (src[i] !== ',') break
         i++
+        if (eq) {
+          let j = i
+          while (j < n && SPACE.test(src[j])) j++
+          FIELD_EQ.lastIndex = j
+          const next = FIELD_EQ.exec(src)
+          if (j === n || src[j] === '(' || src[j] === ')' || (next && schema.alias.has(next[1].toLowerCase()))) break
+          i = j
+        }
       }
       toks.push(parts.length ? { t: 'term', neg, field, kind: 'word', parts, quotes, s, e: i } : { t: 'skip', s, e: i })
       continue
@@ -134,10 +152,22 @@ export function tokenize(src: string, schema: ResolvedSchema): TokenizeResult {
       quotes = [[i, end + 1]]
       i = end + 1
       kind = 'regex'
+    } else if (rx) {
+      let j = i
+      let depth = 0
+      while (j < n && !SPACE.test(src[j])) {
+        if (src[j] === '\\') j++
+        else if (src[j] === '(') depth++
+        else if (src[j] === ')' && depth-- === 0) break
+        j++
+      }
+      value = src.slice(i, j)
+      i = j
     } else {
       value = sticky(WORD, src, i)
       i += value.length
     }
+    if (rx) kind = 'regex'
     if (!field && !neg && kind === 'word') {
       if (value === 'OR') {
         toks.push({ t: 'or', s, e: i })

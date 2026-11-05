@@ -22,6 +22,7 @@ interface Schema {
     selectorField?: string;
     excludeExample?: string;
     parser?: LogParser;
+    operator?: ':' | '=';
 }
 interface ResolvedField extends Omit<FieldDef, 'synonyms' | 'groups'> {
     name: string;
@@ -38,6 +39,7 @@ interface ResolvedSchema {
     selectorField: string;
     excludeExample: string;
     parser?: LogParser;
+    operator: ':' | '=';
     baseSelector: [string, string][];
 }
 declare const defaultSchema: Schema;
@@ -57,6 +59,7 @@ interface Cond {
     value: string | string[];
     spans?: Span[];
     parts?: ValuePart[];
+    anywhere?: boolean;
 }
 interface Group {
     id: number;
@@ -108,6 +111,14 @@ interface Analysis {
     logql: CompileResult;
     filter: ApiFilter | null;
     riskyRegex: boolean;
+    unknownValues: UnknownValue[];
+}
+interface UnknownValue {
+    field: string;
+    value: string;
+    negative: boolean;
+    matches: string[];
+    regex?: boolean;
 }
 interface SavedQuery {
     id?: string;
@@ -116,7 +127,7 @@ interface SavedQuery {
     pinned?: boolean;
 }
 interface Suggestion {
-    kind: 'field' | 'value' | 'saved' | 'recent';
+    kind: 'field' | 'value' | 'saved' | 'recent' | 'operator';
     label: string;
     hint?: string;
     sub?: string;
@@ -124,6 +135,7 @@ interface Suggestion {
     replace?: [number, number];
     text?: string;
     keep?: boolean;
+    caret?: number;
     whole?: string;
 }
 interface SuggestionList {
@@ -131,6 +143,8 @@ interface SuggestionList {
     field?: string;
     items: Suggestion[];
     extra: Suggestion[];
+    extraHead?: string;
+    note?: string;
 }
 interface SuggestExtras {
     saved?: SavedQuery[];
@@ -167,6 +181,8 @@ interface Engine {
     appendTerm(query: string, field: string, values: string[], negative?: boolean): string;
     toggleValue(query: string, field: string, value: string, negative?: boolean): string;
     clearField(query: string, field: string): string;
+    combine(query: string): string;
+    replaceValue(query: string, field: string, from: string, to: string, negative?: boolean): string;
     activeValues(query: string, field: string, negative?: boolean): Set<string>;
 }
 declare function createEngine(options?: EngineOptions): Engine;
@@ -224,6 +240,42 @@ interface Labels {
     suggestionCount: (count: number) => string;
     loadingValues: string;
     savedAndRecent: string;
+    filterPlaceholder: string;
+    queries: string;
+    searchSaved: string;
+    pinnedHead: string;
+    allSavedHead: string;
+    pinnedBadge: string;
+    noSaved: string;
+    noSavedMatch: string;
+    loadingSaved: string;
+    saveShort: string;
+    createAlert: string;
+    copyQuery: string;
+    runQuery: string;
+    pinShort: string;
+    unpinShort: string;
+    editShort: string;
+    removeShort: string;
+    pin: (name: string) => string;
+    unpin: (name: string) => string;
+    edit: (name: string) => string;
+    remove: (name: string) => string;
+    alertFor: (name: string) => string;
+    unknownValue: (label: string, value: string, negative: boolean, hasMatches: boolean) => string;
+    containing: (label: string, value: string, negative: boolean) => string;
+    hiddenFilters: (count: number) => string;
+    confirmRemove: (name: string) => string;
+    removing: string;
+    unknownPattern: (label: string, pattern: string, negative: boolean, hasMatches: boolean) => string;
+    startingWith: (label: string, value: string, negative: boolean) => string;
+    saveAs: string;
+    pinToTop: string;
+    cancel: string;
+    update: string;
+    saving: string;
+    nameLabel: string;
+    queryLabel: string;
 }
 declare const defaultLabels: Labels;
 declare const defaultExamples: string[];
@@ -240,8 +292,33 @@ interface LogQLQueryBoxHandle {
     toggleValue(field: string, value: string, negative?: boolean): void;
     clearField(field: string): void;
     appendTerm(field: string, values: string[], negative?: boolean): void;
+    openQueries(): void;
+    closeQueries(): void;
 }
+type LogQLQueryBoxSlot = 'bar' | 'field' | 'input' | 'queriesButton' | 'queriesPanel' | 'suggestions' | 'run';
 interface LogQLQueryBoxProps {
+    variant?: 'classic' | 'bar';
+    classNames?: Partial<Record<LogQLQueryBoxSlot, string>>;
+    showQueries?: boolean;
+    showRun?: boolean;
+    showValueCounts?: boolean;
+    savedCount?: number;
+    savedLoading?: boolean;
+    onSelectSaved?: (saved: SavedQuery) => void;
+    onPinSaved?: (saved: SavedQuery, pinned: boolean) => void;
+    onEditSaved?: (saved: SavedQuery) => void;
+    onUpdateSaved?: (saved: SavedQuery, changes: {
+        name: string;
+        query: string;
+    }) => unknown;
+    onSaveQuery?: (draft: {
+        name: string;
+        query: string;
+        pinned: boolean;
+    }, existing?: SavedQuery) => unknown;
+    onDeleteSaved?: (saved: SavedQuery) => void;
+    onCreateAlert?: (query: string, saved?: SavedQuery) => void;
+    onSavedSearch?: (text: string) => void;
     value?: string;
     defaultValue?: string;
     onChange?: (query: string, analysis: Analysis) => void;
@@ -284,4 +361,4 @@ interface LogQLQueryBoxProps {
 declare const LogQLQueryBox: react.ForwardRefExoticComponent<LogQLQueryBoxProps & react.RefAttributes<LogQLQueryBoxHandle>>;
 
 export { INVALID_REGEX, LogQLQueryBox, MAX_BRANCHES, MAX_DEPTH, UNSUPPORTED_REGEX, chipLabel, chipText, createEngine, defaultExamples, defaultLabels, defaultNotes, defaultSchema, defaultSyntax, isRiskyRegex, listOf, logqlString, quoteValue, reEsc, regexProblem, resolveSchema, toJsRegex, tokenize, valOf };
-export type { Analysis, ApiFilter, CompileResult, Cond, Engine, EngineOptions, FieldDef, FieldValue, FieldValues, Group, Labels, LogParser, LogQLQueryBoxHandle, LogQLQueryBoxProps, LogRecord, Op, ParseResult, QueryNode, ResolvedField, ResolvedSchema, SavedQuery, Schema, Span, SuggestExtras, Suggestion, SuggestionList, Token, ValuePart };
+export type { Analysis, ApiFilter, CompileResult, Cond, Engine, EngineOptions, FieldDef, FieldValue, FieldValues, Group, Labels, LogParser, LogQLQueryBoxHandle, LogQLQueryBoxProps, LogQLQueryBoxSlot, LogRecord, Op, ParseResult, QueryNode, ResolvedField, ResolvedSchema, SavedQuery, Schema, Span, SuggestExtras, Suggestion, SuggestionList, Token, UnknownValue, ValuePart };

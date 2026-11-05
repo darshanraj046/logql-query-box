@@ -1,9 +1,11 @@
 import { quoteValue } from './edit'
 import type { ResolvedField, ResolvedSchema } from './schema'
+import { isRiskyRegex, toJsRegex } from './regex'
 import { tokenize } from './tokenize'
 import type { SavedQuery, SuggestExtras, Suggestion, SuggestionList, Token } from './types'
 
-const FIELD_TERM = /^([A-Za-z_][A-Za-z0-9_]*):([\s\S]*)$/
+const FIELD_TERM = /^([A-Za-z_][A-Za-z0-9_.]*)(:)([\s\S]*)$/
+const FIELD_TERM_EQ = /^([A-Za-z_][A-Za-z0-9_.]*)(\s*(?:!=|!~|=~|=|:)\s*)([\s\S]*)$/
 const NOTHING: SuggestionList = { head: '', items: [], extra: [] }
 
 export type KnownValues = Map<string, Map<string, number | undefined>>
@@ -68,6 +70,34 @@ export function suggest(src: string, caret: number, schema: ResolvedSchema, know
   const neg = text[0] === '-' ? '-' : ''
   const body = neg ? text.slice(1) : text
   const replace: [number, number] = [tk.s, tk.e]
+  const eq = schema.operator === '='
+
+  if (eq && !text) {
+    const gap = (t?: Token) => !!t && /^\s+$/.test(src.slice(t.e, caret))
+    const lead = tokenize(src.slice(0, caret), schema)
+      .toks.filter((t) => t.t !== 'skip')
+      .pop()
+    const target = lead && gap(lead) && lead.t === 'term' && !lead.field && lead.kind === 'word' ? schema.alias.get((lead.value as string).toLowerCase()) : undefined
+    if (lead && target) {
+      const f = schema.fields.get(target) as ResolvedField
+      const choices: [string, string][] =
+        target === schema.lineField
+          ? [
+              ['=', 'Contains this text. Use * as a wildcard'],
+              ['!=', 'Does not contain this text'],
+              ['=~', 'Matches a pattern (regular expression)'],
+              ['!~', 'Does not match a pattern']
+            ]
+          : [
+              ['=', 'Is one of the values you pick'],
+              ['!=', 'Is not one of the values you pick'],
+              ['=~', 'Contains some text, or matches a pattern'],
+              ['!~', 'Does not contain the text or match the pattern']
+            ]
+      for (const [o, hint] of choices) items.push({ kind: 'operator', label: `${lead.value} ${o}`, hint, replace: [lead.s, caret], text: `${src.slice(lead.s, lead.e)} ${o} `, keep: true })
+      return { head: `How should ${f.label} match?`, items, extra: [] }
+    }
+  }
 
   if (text === '-') {
     for (const f of labelFields(schema)) {
@@ -77,11 +107,49 @@ export function suggest(src: string, caret: number, schema: ResolvedSchema, know
     return { head: 'Exclude (NOT). You can also type -word to hide lines containing it', items, extra: [] }
   }
 
-  const m = FIELD_TERM.exec(body)
+  const sep = eq ? ' ' : ':'
+  const m = (eq ? FIELD_TERM_EQ : FIELD_TERM).exec(body)
   const name = m ? schema.alias.get(m[1].toLowerCase()) : undefined
+  const op = m ? m[2].trim() : ''
+  const regexOp = op === '=~' || op === '!~'
+  const isLine = name === schema.lineField
+  if (eq && m && name && regexOp && !isLine) {
+    const field = schema.fields.get(name) as ResolvedField
+    const head = `${neg}${m[1]}${m[2]}`
+    if (!m[3]) {
+      const anchors: [string, string, number][] = [
+        ['^', `Starts with the text you type next`, 1],
+        ['$', `Ends with the text you type next`, 0],
+        ['^$', `Is exactly the text you type next`, 1]
+      ]
+      for (const [a, hint, at] of anchors) items.push({ kind: 'operator', label: a === '^$' ? '^ … $' : a === '^' ? '^ …' : '… $', hint, replace, text: head + a, caret: head.length + at, keep: true })
+      return { head: 'Pattern', items, extra: [], note: `Or just type some text to match any ${field.label} that contains it.` }
+    }
+    if (!m[3].replace(/^\^/, '').replace(/\$$/, '')) return { head: '', items: [], extra: [], note: `Now type the ${field.label} text.` }
+    const names = valueNames(field, known)
+    if (!names.length) return NOTHING
+    let hits: string[] = []
+    try {
+      if (isRiskyRegex(m[3])) return NOTHING
+      const re = toJsRegex(m[3], false, false)
+      hits = names.filter((v) => re.test(v))
+    } catch {
+      return { head: '', items: [], extra: [], note: 'This is not a complete pattern yet.' }
+    }
+    const shown = hits.slice(0, 3).join(', ') + (hits.length > 3 ? ` and ${hits.length - 3} more` : '')
+    return { head: '', items: [], extra: [], note: hits.length ? `Matches ${hits.length} of ${names.length}: ${shown}` : `Matches no ${field.label}. ^ means starts with and $ means ends with, so ^text$ needs an exact name.` }
+  }
+  if (eq && m && name && (regexOp || isLine)) {
+    const note = !regexOp
+      ? 'Type text to find in the log line. Use * as a wildcard and "quotes" for an exact phrase.'
+      : isLine
+        ? 'Type a regular expression (RE2) to find in the log line, for example timeout|refused.'
+        : 'Type a regular expression (RE2) found anywhere in the value, for example security. Use ^ and $ to anchor it, like ^checkout-'
+    return { head: '', items: [], extra: [], note: m[3] ? undefined : note }
+  }
   if (m && name && name !== schema.lineField) {
     const field = schema.fields.get(name) as ResolvedField
-    const rest = m[2]
+    const rest = m[3]
     const lc = rest.lastIndexOf(',')
     const prior = lc >= 0 ? rest.slice(0, lc + 1) : ''
     const part = (lc >= 0 ? rest.slice(lc + 1) : rest).toLowerCase()
@@ -89,17 +157,14 @@ export function suggest(src: string, caret: number, schema: ResolvedSchema, know
     const chosen = new Set((rest.endsWith(',') ? parts : parts.slice(0, -1)).map((p) => p.v.toLowerCase()))
     const all = valueOptions(field, known).filter((o) => !chosen.has(o.v.toLowerCase()))
     const pre = all.filter((o) => !part || o.v.toLowerCase().indexOf(part) === 0)
-    const hits = pre.length ? pre : all.filter((o) => o.v.toLowerCase().indexOf(part) >= 0)
+    const hits = eq && part ? [...pre, ...all.filter((o) => o.v.toLowerCase().indexOf(part) > 0)] : pre.length ? pre : all.filter((o) => o.v.toLowerCase().indexOf(part) >= 0)
     const counted = all.some((o) => o.n !== undefined)
     for (const o of hits) {
-      items.push({
-        kind: 'value',
-        label: o.v,
-        hint: counted ? `${(o.n ?? 0).toLocaleString('en-US')} lines` : '',
-        color: colorOf(field, o.v),
-        replace,
-        text: `${neg}${m[1]}:${prior}${quoteValue(o.v)} `
-      })
+      items.push({ kind: 'value', label: o.v, hint: counted ? `${(o.n ?? 0).toLocaleString('en-US')} lines` : '', color: colorOf(field, o.v), replace, text: `${neg}${m[1]}${m[2]}${prior}${quoteValue(o.v)} `, keep: eq || undefined })
+    }
+    const typed = (lc >= 0 ? rest.slice(lc + 1) : rest).trim()
+    if (eq && typed.length > 1 && !typed.includes('*') && !all.some((o) => o.v.toLowerCase() === part) && hits.some((o) => o.v.toLowerCase().includes(part))) {
+      items.push({ kind: 'value', label: `*${typed}*`, sub: `${op === '!=' ? 'Every' : 'Any'} ${field.label} containing “${typed}”`, replace, text: `${neg}${m[1]}${m[2]}${prior}*${typed}* `, keep: true })
     }
     return { head: `Values for ${field.label}`, field: name, items, extra: [] }
   }
@@ -107,17 +172,26 @@ export function suggest(src: string, caret: number, schema: ResolvedSchema, know
   if (body) {
     const low = body.toLowerCase()
     for (const f of labelFields(schema)) {
-      const label = `${f.primary}:`
-      if (label.toLowerCase().indexOf(low) === 0 && label.toLowerCase() !== low) {
-        items.push({ kind: 'field', label: neg + label, hint: f.hint ?? `Filter by ${f.label}`, replace, text: neg + label, keep: true })
+      const label = `${f.primary}${sep}`
+      if (label.toLowerCase().indexOf(low) === 0 && (eq || label.toLowerCase() !== low)) {
+        items.push({ kind: 'field', label: neg + label.trimEnd(), hint: f.hint ?? `Filter by ${f.label}`, replace, text: neg + label, keep: true })
       }
+    }
+    if (eq && schema.fields.get(schema.lineField)?.aliases?.some((a) => a.toLowerCase().indexOf(low) === 0)) {
+      const f = schema.fields.get(schema.lineField) as ResolvedField
+      items.push({ kind: 'field', label: f.primary, hint: exampleOf(f, known), replace, text: `${neg}${f.primary} `, keep: true })
     }
     return { head: items.length ? 'Fields' : '', items, extra: [] }
   }
 
   for (const f of labelFields(schema)) {
-    const label = `${f.primary}:`
-    items.push({ kind: 'field', label, hint: exampleOf(f, known), replace, text: label, keep: true })
+    const label = `${f.primary}${sep}`
+    items.push({ kind: 'field', label: label.trimEnd(), hint: exampleOf(f, known), replace, text: label, keep: true })
+  }
+  if (eq) {
+    const f = schema.fields.get(schema.lineField) as ResolvedField
+    if (f.aliases?.length) items.push({ kind: 'field', label: f.primary, hint: exampleOf(f, known), replace, text: `${f.primary} `, keep: true })
+    return { head: 'Fields', items, extra: [] }
   }
   items.push({ kind: 'field', label: '-', hint: `Exclude, for example -${schema.excludeExample}`, replace, text: '-', keep: true })
   const extra: Suggestion[] = []

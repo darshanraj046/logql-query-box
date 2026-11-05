@@ -167,7 +167,43 @@ var defaultLabels = {
   moreFilters: (count) => `+${count} more`,
   suggestionCount: (count) => `${count} ${count === 1 ? "suggestion" : "suggestions"} available`,
   loadingValues: "Loading values\u2026",
-  savedAndRecent: "Saved and recent"
+  savedAndRecent: "Saved and recent",
+  filterPlaceholder: "Type to filter",
+  queries: "Queries",
+  searchSaved: "Search saved queries",
+  pinnedHead: "Pinned",
+  allSavedHead: "All saved",
+  pinnedBadge: "Pinned",
+  noSaved: "No saved queries yet. Type a filter and press Save.",
+  noSavedMatch: "No saved queries match.",
+  loadingSaved: "Loading saved queries\u2026",
+  saveShort: "Save",
+  createAlert: "Create alert",
+  copyQuery: "Copy query",
+  runQuery: "Run query",
+  pinShort: "Pin",
+  unpinShort: "Unpin",
+  editShort: "Edit",
+  removeShort: "Delete",
+  pin: (name) => `Pin ${name}`,
+  unpin: (name) => `Unpin ${name}`,
+  edit: (name) => `Edit ${name}`,
+  remove: (name) => `Delete ${name}`,
+  alertFor: (name) => `Create an alert from ${name}`,
+  unknownValue: (label, value, negative, hasMatches) => `No ${label} is exactly \u201C${value}\u201D, so ${negative ? "nothing was excluded" : "nothing matches it"}.${hasMatches ? " Did you mean:" : " Check the spelling."}`,
+  containing: (label, value, negative) => `${negative ? "Every" : "Any"} ${label} containing \u201C${value}\u201D`,
+  unknownPattern: (label, pattern, negative, hasMatches) => `No ${label} matches \u201C${pattern}\u201D, so ${negative ? "nothing was excluded" : "nothing matches it"}. ^ means starts with and $ means ends with.${hasMatches ? " Did you mean:" : ""}`,
+  startingWith: (label, value, negative) => `${negative ? "Every" : "Any"} ${label} starting with \u201C${value}\u201D`,
+  confirmRemove: (name) => `Delete \u201C${name}\u201D?`,
+  removing: "Deleting\u2026",
+  hiddenFilters: (count) => `+${count} ${count === 1 ? "filter" : "filters"}`,
+  saveAs: "Save query as",
+  pinToTop: "Pin to the top of Queries",
+  cancel: "Cancel",
+  update: "Update",
+  saving: "Saving\u2026",
+  nameLabel: "Name",
+  queryLabel: "Query"
 };
 var defaultExamples = ["level:error,warn", "level:error (timeout OR refused)", "apptype:java /\\w+Exception/", "-level:debug"];
 var defaultSyntax = [
@@ -262,9 +298,23 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
     disabled = false,
     readOnly = false,
     autoFocus = false,
-    rows = 2,
-    showHelp = true,
-    showLogql = true,
+    variant = "classic",
+    classNames = {},
+    showQueries = true,
+    showRun = true,
+    showValueCounts = true,
+    savedCount,
+    savedLoading = false,
+    onSelectSaved,
+    onPinSaved,
+    onEditSaved,
+    onUpdateSaved,
+    onSaveQuery,
+    onDeleteSaved,
+    onCreateAlert,
+    onSavedSearch,
+    showHelp = false,
+    showLogql = false,
     defaultLogqlOpen = false,
     executeOnMount = false,
     globalShortcuts = false,
@@ -272,6 +322,8 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
     className,
     style
   } = props;
+  const bar = variant === "bar";
+  const rows = props.rows ?? (bar ? 1 : 2);
   const labels = (0, import_react2.useMemo)(() => ({ ...defaultLabels, ...props.labels }), [props.labels]);
   const baseKey = JSON.stringify(baseSelector);
   const [loaded, setLoaded] = (0, import_react2.useState)({});
@@ -282,11 +334,18 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
   const [inner, setInner] = (0, import_react2.useState)(defaultValue);
   const query = controlled ? value : inner;
   const [ran, setRan] = (0, import_react2.useState)(query);
+  const [checked, setChecked] = (0, import_react2.useState)(null);
   const [menu, setMenu] = (0, import_react2.useState)(null);
   const [logqlOpen, setLogqlOpen] = (0, import_react2.useState)(defaultLogqlOpen);
   const [helpOpen, setHelpOpen] = (0, import_react2.useState)(false);
   const [copied, setCopied] = (0, import_react2.useState)(null);
   const [storedRecent, setStoredRecent] = (0, import_react2.useState)([]);
+  const [focused, setFocused] = (0, import_react2.useState)(false);
+  const [qOpen, setQOpen] = (0, import_react2.useState)(false);
+  const [qText, setQText] = (0, import_react2.useState)("");
+  const qBtnRef = (0, import_react2.useRef)(null);
+  const qPanelRef = (0, import_react2.useRef)(null);
+  const hlRef = (0, import_react2.useRef)(null);
   const inputRef = (0, import_react2.useRef)(null);
   const helpButtonRef = (0, import_react2.useRef)(null);
   const wrapRef = (0, import_react2.useRef)(null);
@@ -305,13 +364,14 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
   const analysis = (0, import_react2.useMemo)(() => engine.analyze(query), [engine, query]);
   const recentList = recent ?? storedRecent;
   const interactive = !disabled && !readOnly;
-  const sugg = (0, import_react2.useMemo)(() => menu && interactive ? engine.suggest(query, menu.caret, { saved, recent: recentList }) : null, [menu, interactive, engine, query, saved, recentList]);
+  const sugg = (0, import_react2.useMemo)(() => menu && interactive ? engine.suggest(query, menu.caret, bar ? {} : { saved, recent: recentList }) : null, [menu, interactive, engine, query, saved, recentList, bar]);
   const items = (0, import_react2.useMemo)(() => sugg ? [...sugg.items, ...sugg.extra] : [], [sugg]);
   const open = items.length > 0;
   const at = menu ? Math.min(menu.at, items.length - 1) : -1;
   const valueField = sugg?.field;
   const waiting = !!valueField && loading.includes(valueField);
-  const shown = open || waiting;
+  const note = sugg?.note;
+  const shown = open || waiting || !!note;
   const usable = (text) => [...text.matchAll(/(?:^|[\s(`-])([A-Za-z_][A-Za-z0-9_]*):/g)].every((m) => engine.schema.alias.has(m[1].toLowerCase()));
   const shownExamples = examples ?? defaultExamples.filter(usable);
   const shownSyntax = syntax ?? defaultSyntax.filter((s) => usable(s[0]));
@@ -381,6 +441,103 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
       window.removeEventListener("scroll", place, true);
     };
   }, [shown, items, waiting]);
+  const [draft, setDraft] = (0, import_react2.useState)(null);
+  const [removing, setRemoving] = (0, import_react2.useState)(null);
+  const [editing, setEditing] = (0, import_react2.useState)(null);
+  const saveBtnRef = (0, import_react2.useRef)(null);
+  const savePopRef = (0, import_react2.useRef)(null);
+  const expanded = bar && (focused || !!draft) && !qOpen && !!query;
+  (0, import_react2.useEffect)(() => {
+    if (qOpen) return;
+    setEditing(null);
+    setRemoving(null);
+  }, [qOpen]);
+  useIsoLayoutEffect(() => {
+    const pop = savePopRef.current;
+    const btn = saveBtnRef.current;
+    if (!draft || !pop || !btn) return;
+    if ("showPopover" in pop && !pop.matches(":popover-open")) {
+      pop.setAttribute("popover", "manual");
+      pop.showPopover();
+    }
+    const place = () => {
+      const box = btn.getBoundingClientRect();
+      const width = Math.min(360, window.innerWidth - 16);
+      pop.style.width = `${width}px`;
+      pop.style.left = `${Math.max(8, Math.min(box.right - width, window.innerWidth - width - 8))}px`;
+      pop.style.top = `${box.bottom + MENU_GAP}px`;
+    };
+    place();
+    const outside = (e) => {
+      const t = e.target;
+      if (!pop.contains(t) && !btn.contains(t)) setDraft(null);
+    };
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    document.addEventListener("mousedown", outside);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+      document.removeEventListener("mousedown", outside);
+    };
+  }, [!!draft]);
+  const summarize = bar && !expanded && !!query;
+  const sumRef = (0, import_react2.useRef)(null);
+  const [fit, setFit] = (0, import_react2.useState)({ hidden: 0, over: false });
+  useIsoLayoutEffect(() => {
+    const el = sumRef.current;
+    if (!summarize || !el) return;
+    const measure = () => {
+      const width = el.clientWidth;
+      let hidden = 0;
+      el.querySelectorAll(".lqb-piece").forEach((p) => {
+        if (p.offsetLeft + p.offsetWidth > width + 1) hidden++;
+      });
+      const over = el.scrollWidth > width + 1;
+      setFit((f) => f.hidden === hidden && f.over === over ? f : { hidden, over });
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [summarize, query]);
+  useIsoLayoutEffect(() => {
+    const el = inputRef.current;
+    if (!bar || !el) return;
+    el.style.height = "";
+    if (expanded) el.style.height = `${Math.min(260, Math.max(el.scrollHeight, el.offsetHeight))}px`;
+  }, [bar, expanded, query]);
+  useIsoLayoutEffect(() => {
+    const panel = qPanelRef.current;
+    const btn = qBtnRef.current;
+    if (!qOpen || !panel || !btn) return;
+    if ("showPopover" in panel) {
+      panel.setAttribute("popover", "manual");
+      panel.showPopover();
+    }
+    const place = () => {
+      const box = btn.getBoundingClientRect();
+      const width = Math.min(400, window.innerWidth - 16);
+      panel.style.width = `${width}px`;
+      panel.style.left = `${Math.max(8, Math.min(box.right - width, window.innerWidth - width - 8))}px`;
+      panel.style.top = `${box.bottom + MENU_GAP + 4}px`;
+      panel.style.maxHeight = `${Math.max(200, Math.min(520, window.innerHeight - box.bottom - MENU_GAP * 3))}px`;
+    };
+    place();
+    const outside = (e) => {
+      const t = e.target;
+      if (!panel.contains(t) && !btn.contains(t)) setQOpen(false);
+    };
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    document.addEventListener("mousedown", outside);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+      document.removeEventListener("mousedown", outside);
+    };
+  }, [qOpen]);
   (0, import_react2.useEffect)(() => {
     if (!open || at < 0) return;
     document.getElementById(optionId(at))?.scrollIntoView?.({ block: "nearest" });
@@ -397,10 +554,13 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
     writeRecent(recentStorageKey, next);
     setStoredRecent(next);
   };
-  const execute = (q = query) => {
+  const execute = (raw = query) => {
+    const q = engine.schema.operator === "=" ? engine.combine(raw) : raw;
     const result = engine.analyze(q);
     if (result.error) return false;
+    if (q !== raw) change(q);
     setRan(q);
+    setChecked(q);
     remember(q);
     onExecute?.(result);
     return true;
@@ -424,7 +584,7 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
     }
     const [s, e] = it.replace;
     const text = it.text;
-    const pos = s + text.length;
+    const pos = s + (it.caret ?? text.length);
     pendingCaret.current = pos;
     change(query.slice(0, s) + text + query.slice(e));
     setMenu(it.keep ? { caret: pos, at: 0 } : null);
@@ -446,7 +606,7 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
         setMenu((m) => m && { ...m, at: (at - 1 + items.length) % items.length });
       }
     } else if (e.key === "Tab") {
-      if (open && !e.shiftKey && currentToken()) {
+      if (open && !e.shiftKey && (currentToken() || items[at]?.kind === "operator")) {
         e.preventDefault();
         accept(at);
       }
@@ -454,7 +614,7 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
       e.preventDefault();
       const it = open ? items[at] : void 0;
       const cur = currentToken();
-      if (it?.kind === "value" && cur.indexOf(":") > 0 && it.text?.trim() !== cur) accept(at);
+      if (it?.kind === "value" && (cur.indexOf(":") > 0 || engine.schema.operator === "=" && cur.indexOf("=") > 0) && it.text?.trim() !== cur) accept(at);
       else if (it?.whole != null && !cur && !query.trim()) accept(at);
       else {
         setMenu(null);
@@ -498,7 +658,9 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
     execute: () => execute(),
     toggleValue: (field, v, negative) => commit(engine.toggleValue(query, field, v, negative)),
     clearField: (field) => commit(engine.clearField(query, field)),
-    appendTerm: (field, list, negative) => commit(engine.appendTerm(query, field, list, negative))
+    appendTerm: (field, list, negative) => commit(engine.appendTerm(query, field, list, negative)),
+    openQueries: () => setQOpen(true),
+    closeQueries: () => setQOpen(false)
   }));
   const savedMatch = query.trim() ? saved?.find((s) => s.query.trim() === query.trim()) : void 0;
   const isDirty = query !== ran || dirty;
@@ -532,52 +694,427 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
         it.color && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("i", { style: { "--lqb-c": it.color } }),
         /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("code", { children: it.label }),
         it.sub && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "lqb-hint lqb-sub", children: it.sub }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "lqb-hint", children: it.hint ?? "" })
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "lqb-hint", children: it.kind === "value" && !showValueCounts ? "" : it.hint ?? "" })
       ]
     },
     `${it.kind}-${it.label}-${i}`
   );
+  const textarea = /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+    "textarea",
+    {
+      ref: inputRef,
+      rows,
+      className: classNames.input,
+      role: "combobox",
+      "aria-expanded": shown,
+      "aria-controls": shown ? listId : void 0,
+      "aria-activedescendant": open && at >= 0 ? optionId(at) : void 0,
+      "aria-autocomplete": "list",
+      "aria-label": labels.ariaLabel,
+      "aria-invalid": blocked || void 0,
+      "aria-describedby": blocked ? errorId : void 0,
+      placeholder: bar && !props.labels?.placeholder ? labels.filterPlaceholder : labels.placeholder,
+      spellCheck: false,
+      autoComplete: "off",
+      autoFocus,
+      disabled,
+      readOnly,
+      value: query,
+      onChange: (e) => {
+        change(e.target.value);
+        if (interactive) setMenu({ caret: e.target.selectionStart ?? e.target.value.length, at: 0 });
+      },
+      onFocus: () => {
+        setFocused(true);
+        openMenu();
+      },
+      onClick: openMenu,
+      onBlur: () => {
+        setFocused(false);
+        setMenu(null);
+      },
+      onKeyDown,
+      onKeyUp: (e) => {
+        if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End") openMenu();
+      },
+      onScroll: (e) => {
+        if (hlRef.current) hlRef.current.scrollTop = e.currentTarget.scrollTop;
+      }
+    }
+  );
+  const suggestions = shown && sugg && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: ["lqb-sugg", classNames.suggestions].filter(Boolean).join(" "), ref: listRef, id: listId, role: "listbox", "aria-label": labels.ariaLabel, onMouseDown: (e) => e.preventDefault(), children: [
+    sugg.items.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { role: "group", "aria-label": sugg.head || labels.ariaLabel, children: [
+      sugg.head && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "lqb-sg-h", "aria-hidden": "true", children: sugg.head }),
+      sugg.items.map((it, i) => row(it, i))
+    ] }),
+    note && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "lqb-sg-note", children: note }),
+    sugg.extra.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { role: "group", "aria-label": sugg.extraHead ?? labels.savedAndRecent, children: [
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "lqb-sg-h", "aria-hidden": "true", children: sugg.extraHead ?? labels.savedAndRecent }),
+      sugg.extra.map((it, i) => row(it, i + sugg.items.length))
+    ] }),
+    waiting && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "lqb-sg-h", "aria-hidden": "true", children: labels.loadingValues })
+  ] });
+  const liveRegion = /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "lqb-sr", "aria-live": "polite", children: waiting ? labels.loadingValues : open ? labels.suggestionCount(items.length) : note ?? "" });
+  const unknown = query === checked && interactive ? analysis.unknownValues[0] : void 0;
+  const unknownLabel = unknown ? engine.schema.fields.get(unknown.field)?.label ?? unknown.field : "";
+  const unknownBox = unknown && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "lqb-unknown", role: "status", children: [
+    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { children: unknown.regex ? labels.unknownPattern(unknownLabel, unknown.value, unknown.negative, unknown.matches.length > 0) : labels.unknownValue(unknownLabel, unknown.value, unknown.negative, unknown.matches.length > 0) }),
+    unknown.matches.map((v) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "lqb-fix", onClick: () => commit(engine.replaceValue(query, unknown.field, unknown.value, v, unknown.negative)), children: v }, v)),
+    unknown.regex && /^\^[\w.-]+\$?$/.test(unknown.value) && unknown.matches.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "lqb-fix", onClick: () => commit(engine.replaceValue(query, unknown.field, unknown.value, `${unknown.value.replace(/^\^/, "").replace(/\$$/, "")}*`, unknown.negative)), children: labels.startingWith(unknownLabel, unknown.value.replace(/^\^/, "").replace(/\$$/, ""), unknown.negative) }),
+    unknown.matches.length > 1 && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "lqb-fix", onClick: () => commit(engine.replaceValue(query, unknown.field, unknown.value, `*${unknown.value.replace(/^\^/, "").replace(/\$$/, "")}*`, unknown.negative)), children: labels.containing(unknownLabel, unknown.value.replace(/^\^/, "").replace(/\$$/, ""), unknown.negative) })
+  ] });
+  const errorBox = analysis.error && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "lqb-error", id: errorId, role: "alert", children: analysis.error });
+  const logqlPanel = showLogql && logqlOpen && !analysis.error && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "lqb-logql", children: [
+    analysis.logql.branches.map((branch, i) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "lqb-pre-h", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { children: analysis.logql.branches.length > 1 ? labels.branch(i + 1, analysis.logql.branches.length) : labels.logQuery }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "lqb-mini", onClick: () => copyBranch(i, branch), children: copied?.index === i ? copied.text : labels.copy })
+      ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("pre", { children: branch })
+    ] }, i)),
+    analysis.logql.branches.length > 1 && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "lqb-note", children: labels.mergeNote })
+  ] });
+  const logqlToggle = showLogql && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "lqb-link", "aria-expanded": logqlOpen, onClick: () => setLogqlOpen((x) => !x), children: logqlOpen ? labels.hideLogql : labels.showLogql });
+  const helpButton = showHelp && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "lqb-link", ref: helpButtonRef, onClick: () => setHelpOpen(true), children: labels.help });
+  const runButton = /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("button", { type: "button", className: [isDirty || blocked ? "lqb-run" : "lqb-run lqb-run-idle", classNames.run].filter(Boolean).join(" "), disabled: blocked || disabled || running, onClick: () => execute(), children: [
+    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("svg", { ...ICON, width: 14, height: 14, children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("path", { d: "M7 4l13 8-13 8z" }) }),
+    bar ? labels.runQuery : labels.execute
+  ] });
+  const helpDialog = helpOpen && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+    HelpDialog,
+    {
+      labels,
+      rootClass,
+      rootStyle: style,
+      theme: themeAttr,
+      syntax: shownSyntax,
+      notes: shownNotes,
+      shortcuts: globalShortcuts,
+      onPick: (q) => {
+        setHelpOpen(false);
+        commit(q);
+      },
+      onClose: closeHelp
+    }
+  );
+  if (bar) {
+    const needle = qText.trim().toLowerCase();
+    const matches = (saved ?? []).filter((s) => !needle || s.name.toLowerCase().includes(needle) || s.query.toLowerCase().includes(needle));
+    const pinnedList = matches.filter((s) => s.pinned);
+    const restList = matches.filter((s) => !s.pinned);
+    const count = savedCount ?? saved?.length ?? 0;
+    const keep = (e) => e.preventDefault();
+    const paint = (text, key) => {
+      const out = [];
+      let last = 0;
+      for (const m of text.matchAll(/(^|[\s(,])(-?)([A-Za-z_][A-Za-z0-9_.]*)(\s*(?:!=|!~|=~|=|:))/g)) {
+        if (!engine.schema.alias.has(m[3].toLowerCase())) continue;
+        const s = m.index + m[1].length + m[2].length;
+        out.push(
+          text.slice(last, s),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "lqb-hl-f", children: m[3] }, `${key}${s}`),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "lqb-hl-op", children: m[4] }, `${key}${s}o`)
+        );
+        last = s + m[3].length + m[4].length;
+      }
+      out.push(text.slice(last));
+      return out;
+    };
+    const hl = [...paint(query, "q"), "\u200B"];
+    const flat = (text) => text.replace(/\s+/g, " ").trim();
+    const pieces = analysis.parsed.children.length ? analysis.parsed.children.map((n) => flat(n.spans.map(([a, b]) => query.slice(a, b)).join(" "))) : [flat(query)];
+    const autoName = analysis.parsed.children.map((n) => n.type === "cond" ? n.parts ? n.parts.map((p) => p.v).join(", ") : String(n.value) : engine.chipText(n)).filter(Boolean).join(" \xB7 ").slice(0, 80);
+    const failed = (e) => e instanceof Error ? e.message : String(e);
+    const submitDraft = () => {
+      if (!draft || draft.busy || !onSaveQuery || !draft.name.trim() || blocked) return;
+      const next = { name: draft.name.trim(), query, pinned: draft.pinned };
+      setDraft({ ...draft, busy: true, error: "" });
+      Promise.resolve().then(() => onSaveQuery(next, savedMatch)).then(
+        () => setDraft(null),
+        (e) => setDraft((d) => d && { ...d, busy: false, error: failed(e) })
+      );
+    };
+    const submitEdit = (s) => {
+      if (!editing || editing.busy || !onUpdateSaved || !editing.name.trim() || !editing.query.trim() || engine.analyze(editing.query).error) return;
+      const changes = { name: editing.name.trim(), query: editing.query };
+      setEditing({ ...editing, busy: true, error: "" });
+      Promise.resolve().then(() => onUpdateSaved(s, changes)).then(
+        () => setEditing(null),
+        (e) => setEditing((d) => d && { ...d, busy: false, error: failed(e) })
+      );
+    };
+    const confirmRemove = (s) => {
+      if (!removing || removing.busy || !onDeleteSaved) return;
+      setRemoving({ ...removing, busy: true, error: "" });
+      Promise.resolve().then(() => onDeleteSaved(s)).then(
+        () => setRemoving(null),
+        (e) => setRemoving((d) => d && { ...d, busy: false, error: failed(e) })
+      );
+    };
+    const item = (s) => removing?.key === (s.id ?? s.name) ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
+      "div",
+      {
+        className: "lqb-q-confirm",
+        role: "group",
+        "aria-label": labels.confirmRemove(s.name),
+        onKeyDown: (e) => {
+          if (e.key === "Escape") {
+            e.stopPropagation();
+            setRemoving(null);
+          }
+        },
+        children: [
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { children: removing.error || labels.confirmRemove(s.name) }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "lqb-btn lqb-btn-danger", disabled: removing.busy, onClick: () => confirmRemove(s), children: removing.busy ? labels.removing : labels.removeShort }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "lqb-btn lqb-btn-outline", autoFocus: true, onClick: () => setRemoving(null), children: labels.cancel })
+        ]
+      },
+      s.id ?? s.name
+    ) : editing?.key === (s.id ?? s.name) ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
+      "div",
+      {
+        className: "lqb-q-edit",
+        onKeyDown: (e) => {
+          if (e.key === "Escape") {
+            e.stopPropagation();
+            setEditing(null);
+          } else if (e.key === "Enter" && !e.shiftKey && !(e.target instanceof HTMLButtonElement)) {
+            e.preventDefault();
+            submitEdit(s);
+          }
+        },
+        children: [
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("input", { className: "lqb-input", "aria-label": labels.nameLabel, autoFocus: true, value: editing.name, onFocus: (e) => e.currentTarget.select(), onChange: (e) => setEditing({ ...editing, name: e.target.value }) }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("textarea", { className: "lqb-q-edit-query", "aria-label": labels.queryLabel, rows: 3, spellCheck: false, value: editing.query, onChange: (e) => setEditing({ ...editing, query: e.target.value }) }),
+          (editing.error || engine.analyze(editing.query).error) && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "lqb-error", children: editing.error || engine.analyze(editing.query).error }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "lqb-pop-acts", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "lqb-btn", onClick: () => setEditing(null), children: labels.cancel }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "lqb-btn lqb-btn-primary", disabled: editing.busy || !editing.name.trim() || !editing.query.trim() || !!engine.analyze(editing.query).error, onClick: () => submitEdit(s), children: editing.busy ? labels.saving : labels.saveShort })
+          ] })
+        ]
+      },
+      s.id ?? s.name
+    ) : /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "lqb-q-item", children: [
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
+        "button",
+        {
+          type: "button",
+          className: "lqb-q-main",
+          title: s.query,
+          onClick: () => {
+            setQOpen(false);
+            setQText("");
+            commit(s.query);
+            onSelectSaved?.(s);
+          },
+          children: [
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { className: "lqb-q-name", children: [
+              s.name,
+              s.pinned && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("svg", { ...ICON, width: 14, height: 14, "aria-label": labels.pinnedBadge, role: "img", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("path", { d: "M9 3h6l-1 6 4 4H6l4-4zM12 13v8", fill: "currentColor" }) })
+            ] }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("code", { children: s.query })
+          ]
+        }
+      ),
+      interactive && (onPinSaved || onCreateAlert || onEditSaved || onUpdateSaved || onDeleteSaved) && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { className: "lqb-q-acts", children: [
+        onPinSaved && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "lqb-icon-btn", "aria-label": s.pinned ? labels.unpin(s.name) : labels.pin(s.name), title: s.pinned ? labels.unpinShort : labels.pinShort, onClick: () => onPinSaved(s, !s.pinned), children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("svg", { ...ICON, children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("path", { d: s.pinned ? "M9 3h6l-1 6 4 4H6l4-4zM12 13v8M4 4l16 16" : "M9 3h6l-1 6 4 4H6l4-4zM12 13v8" }) }) }),
+        onCreateAlert && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "lqb-icon-btn", "aria-label": labels.alertFor(s.name), title: labels.createAlert, onClick: () => onCreateAlert(s.query, s), children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("svg", { ...ICON, children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("path", { d: "M6 16v-5a6 6 0 0 1 12 0v5l2 2H4zM10 21h4" }) }) }),
+        (onEditSaved || onUpdateSaved) && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+          "button",
+          {
+            type: "button",
+            className: "lqb-icon-btn",
+            "aria-label": labels.edit(s.name),
+            title: labels.editShort,
+            onClick: () => onUpdateSaved ? setEditing({ key: s.id ?? s.name, name: s.name, query: s.query, error: "", busy: false }) : onEditSaved?.(s),
+            children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("svg", { ...ICON, children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("path", { d: "M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4" }) })
+          }
+        ),
+        onDeleteSaved && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "lqb-icon-btn lqb-danger", "aria-label": labels.remove(s.name), title: labels.removeShort, onClick: () => setRemoving({ key: s.id ?? s.name, error: "", busy: false }), children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("svg", { ...ICON, children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("path", { d: "M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" }) }) })
+      ] })
+    ] }, s.id ?? s.name);
+    return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: `${rootClass} lqb-v-bar`, style, "data-lqb-theme": themeAttr, "aria-busy": running || void 0, children: [
+      blurb !== false && description !== void 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "lqb-desc", children: blurb }),
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "lqb-bar-row", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "lqb-bar-slot", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { ref: wrapRef, className: ["lqb-bar", classNames.bar].filter(Boolean).join(" "), "data-open": expanded || void 0, "data-focus": focused || void 0, "data-invalid": blocked || void 0, children: [
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: ["lqb-field", classNames.field].filter(Boolean).join(" "), onMouseDown: (e) => e.target === e.currentTarget && (keep(e), inputRef.current?.focus()), children: [
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("svg", { ...ICON, className: "lqb-funnel", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("path", { d: "M3 5h18l-7 8v6l-4 2v-8z" }) }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "lqb-edit", children: [
+              summarize ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "lqb-summary", ref: sumRef, "data-overflow": fit.over || void 0, "aria-hidden": "true", children: pieces.map((p, i) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { className: "lqb-piece", children: [
+                i > 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "lqb-sep", children: ", " }),
+                paint(p, `p${i}`)
+              ] }, i)) }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "lqb-hl", ref: hlRef, "aria-hidden": "true", children: hl }),
+              textarea
+            ] }),
+            summarize && fit.hidden > 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "lqb-more", children: labels.hiddenFilters(fit.hidden) }),
+            query && interactive && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("span", { className: "lqb-field-acts", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+                "button",
+                {
+                  type: "button",
+                  className: "lqb-icon-btn",
+                  "aria-label": labels.clearAria,
+                  title: labels.clear,
+                  onMouseDown: keep,
+                  onClick: () => {
+                    commit("");
+                    inputRef.current?.focus();
+                  },
+                  children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("svg", { ...ICON, children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("path", { d: "M6 6l12 12M18 6L6 18" }) })
+                }
+              ),
+              expanded && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "lqb-icon-btn", "aria-label": labels.copyQuery, title: copied?.index === -1 ? copied.text : labels.copyQuery, onMouseDown: keep, onClick: () => copyBranch(-1, query), children: /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("svg", { ...ICON, children: [
+                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("rect", { x: "9", y: "9", width: "11", height: "11", rx: "2" }),
+                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("path", { d: "M5 15V6a2 2 0 0 1 2-2h8" })
+              ] }) })
+            ] })
+          ] }),
+          showQueries && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "lqb-qside", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("button", { type: "button", ref: qBtnRef, className: ["lqb-qbtn", classNames.queriesButton].filter(Boolean).join(" "), "aria-haspopup": "dialog", "aria-expanded": qOpen, onClick: () => setQOpen((x) => !x), children: [
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("svg", { ...ICON, children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("path", { d: "M6 3h12v18l-6-4-6 4z" }) }),
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { children: labels.queries }),
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "lqb-count", children: count }),
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("svg", { ...ICON, width: 15, height: 15, children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("path", { d: "M6 9l6 6 6-6" }) })
+            ] }),
+            expanded && interactive && (onSave || onSaveQuery || onCreateAlert) && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "lqb-qside-acts", children: [
+              (onSave || onSaveQuery) && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
+                "button",
+                {
+                  type: "button",
+                  ref: saveBtnRef,
+                  className: "lqb-side-btn",
+                  "aria-expanded": onSaveQuery ? !!draft : void 0,
+                  title: savedMatch ? labels.savedAs(savedMatch.name) : labels.save,
+                  disabled: !query.trim(),
+                  onMouseDown: keep,
+                  onClick: () => onSaveQuery ? setDraft((d) => d ? null : { name: savedMatch?.name ?? autoName, pinned: savedMatch?.pinned ?? false, error: "", busy: false }) : onSave?.(query, savedMatch),
+                  children: [
+                    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("svg", { ...ICON, children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("path", { d: "M6 3h12v18l-6-4-6 4z" }) }),
+                    labels.saveShort
+                  ]
+                }
+              ),
+              onCreateAlert && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("button", { type: "button", className: "lqb-side-btn", disabled: blocked || !query.trim(), onMouseDown: keep, onClick: () => onCreateAlert(query, savedMatch), children: [
+                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("svg", { ...ICON, children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("path", { d: "M6 16v-5a6 6 0 0 1 12 0v5l2 2H4zM10 21h4" }) }),
+                labels.createAlert
+              ] })
+            ] })
+          ] }),
+          suggestions,
+          liveRegion
+        ] }) }),
+        showRun && runButton,
+        actions
+      ] }),
+      errorBox,
+      unknownBox,
+      (showHelp || showLogql) && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "lqb-tools", children: [
+        helpButton,
+        logqlToggle
+      ] }),
+      logqlPanel,
+      draft && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
+        "div",
+        {
+          className: "lqb-savepop",
+          ref: savePopRef,
+          role: "dialog",
+          "aria-label": labels.saveAs,
+          onKeyDown: (e) => {
+            if (e.key === "Escape") {
+              e.stopPropagation();
+              setDraft(null);
+              inputRef.current?.focus();
+            } else if (e.key === "Enter" && !(e.target instanceof HTMLButtonElement)) {
+              e.preventDefault();
+              submitDraft();
+            }
+          },
+          children: [
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "lqb-pop-title", children: labels.saveAs }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("input", { className: "lqb-input", "aria-label": labels.nameLabel, autoFocus: true, value: draft.name, onFocus: (e) => e.currentTarget.select(), onChange: (e) => setDraft({ ...draft, name: e.target.value }) }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("label", { className: "lqb-check", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("input", { type: "checkbox", checked: draft.pinned, onChange: (e) => setDraft({ ...draft, pinned: e.target.checked }) }),
+              labels.pinToTop
+            ] }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("code", { className: "lqb-pop-preview", title: query, children: flat(query) }),
+            draft.error && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "lqb-error", children: draft.error }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "lqb-pop-acts", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+                "button",
+                {
+                  type: "button",
+                  className: "lqb-btn",
+                  onClick: () => {
+                    setDraft(null);
+                    inputRef.current?.focus();
+                  },
+                  children: labels.cancel
+                }
+              ),
+              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "lqb-btn lqb-btn-primary", disabled: draft.busy || !draft.name.trim() || blocked, onClick: submitDraft, children: draft.busy ? labels.saving : savedMatch ? labels.update : labels.saveShort })
+            ] })
+          ]
+        }
+      ),
+      qOpen && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: ["lqb-qpanel", classNames.queriesPanel].filter(Boolean).join(" "), ref: qPanelRef, role: "dialog", "aria-label": labels.queries, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "lqb-q-search", children: [
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("svg", { ...ICON, children: [
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("circle", { cx: "11", cy: "11", r: "7" }),
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("path", { d: "M20 20l-3.5-3.5" })
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+            "input",
+            {
+              autoFocus: true,
+              value: qText,
+              placeholder: labels.searchSaved,
+              "aria-label": labels.searchSaved,
+              onChange: (e) => {
+                setQText(e.target.value);
+                onSavedSearch?.(e.target.value);
+              },
+              onKeyDown: (e) => {
+                if (e.key === "Escape") {
+                  e.stopPropagation();
+                  setQOpen(false);
+                  qBtnRef.current?.focus();
+                } else if (e.key === "Enter" && matches[0]) {
+                  e.preventDefault();
+                  setQOpen(false);
+                  setQText("");
+                  commit(matches[0].query);
+                  onSelectSaved?.(matches[0]);
+                }
+              }
+            }
+          )
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "lqb-q-list", children: [
+          savedLoading && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "lqb-q-empty", children: labels.loadingSaved }),
+          !savedLoading && !matches.length && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "lqb-q-empty", children: needle ? labels.noSavedMatch : labels.noSaved }),
+          pinnedList.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { role: "group", "aria-label": labels.pinnedHead, children: [
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "lqb-sg-h", children: labels.pinnedHead }),
+            pinnedList.map(item)
+          ] }),
+          restList.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { role: "group", "aria-label": labels.allSavedHead, className: pinnedList.length ? "lqb-q-sep" : void 0, children: [
+            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "lqb-sg-h", children: labels.allSavedHead }),
+            restList.map(item)
+          ] })
+        ] })
+      ] }),
+      helpDialog
+    ] });
+  }
   return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: rootClass, style, "data-lqb-theme": themeAttr, "aria-busy": running || void 0, children: [
     (blurb !== false || showHelp) && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "lqb-head", children: [
       blurb !== false ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "lqb-desc", children: blurb }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", {}),
-      showHelp && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "lqb-link", ref: helpButtonRef, onClick: () => setHelpOpen(true), children: labels.help })
+      helpButton
     ] }),
     /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "lqb-wrap", ref: wrapRef, children: [
       /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "lqb-box", children: [
         /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "lqb-row", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
-            "textarea",
-            {
-              ref: inputRef,
-              rows,
-              role: "combobox",
-              "aria-expanded": shown,
-              "aria-controls": shown ? listId : void 0,
-              "aria-activedescendant": open && at >= 0 ? optionId(at) : void 0,
-              "aria-autocomplete": "list",
-              "aria-label": labels.ariaLabel,
-              "aria-invalid": blocked || void 0,
-              "aria-describedby": blocked ? errorId : void 0,
-              placeholder: labels.placeholder,
-              spellCheck: false,
-              autoComplete: "off",
-              autoFocus,
-              disabled,
-              readOnly,
-              value: query,
-              onChange: (e) => {
-                change(e.target.value);
-                if (interactive) setMenu({ caret: e.target.selectionStart ?? e.target.value.length, at: 0 });
-              },
-              onFocus: openMenu,
-              onClick: openMenu,
-              onBlur: () => setMenu(null),
-              onKeyDown,
-              onKeyUp: (e) => {
-                if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End") openMenu();
-              }
-            }
-          ),
+          textarea,
           query && interactive && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
             "button",
             {
@@ -615,60 +1152,23 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
           analysis.parsed.children.length > CHIP_LIMIT && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "lqb-chip lqb-chip-more", children: labels.moreFilters(analysis.parsed.children.length - CHIP_LIMIT) })
         ] })
       ] }),
-      shown && sugg && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "lqb-sugg", ref: listRef, id: listId, role: "listbox", "aria-label": labels.ariaLabel, onMouseDown: (e) => e.preventDefault(), children: [
-        sugg.items.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { role: "group", "aria-label": sugg.head || labels.ariaLabel, children: [
-          sugg.head && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "lqb-sg-h", "aria-hidden": "true", children: sugg.head }),
-          sugg.items.map((it, i) => row(it, i))
-        ] }),
-        sugg.extra.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { role: "group", "aria-label": labels.savedAndRecent, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "lqb-sg-h", "aria-hidden": "true", children: labels.savedAndRecent }),
-          sugg.extra.map((it, i) => row(it, i + sugg.items.length))
-        ] }),
-        waiting && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "lqb-sg-h", "aria-hidden": "true", children: labels.loadingValues })
-      ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "lqb-sr", "aria-live": "polite", children: waiting ? labels.loadingValues : open ? labels.suggestionCount(items.length) : "" })
+      suggestions,
+      liveRegion
     ] }),
-    analysis.error && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "lqb-error", id: errorId, role: "alert", children: analysis.error }),
+    errorBox,
+    unknownBox,
     !query.trim() && shownExamples.length > 0 && interactive && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "lqb-try", children: [
       /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { children: labels.tryLabel }),
       shownExamples.map((q) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", onClick: () => commit(q), children: q }, q))
     ] }),
-    showLogql && logqlOpen && !analysis.error && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "lqb-logql", children: [
-      analysis.logql.branches.map((branch, i) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { children: [
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "lqb-pre-h", children: [
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { children: analysis.logql.branches.length > 1 ? labels.branch(i + 1, analysis.logql.branches.length) : labels.logQuery }),
-          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "lqb-mini", onClick: () => copyBranch(i, branch), children: copied?.index === i ? copied.text : labels.copy })
-        ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("pre", { children: branch })
-      ] }, i)),
-      analysis.logql.branches.length > 1 && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "lqb-note", children: labels.mergeNote })
-    ] }),
+    logqlPanel,
     /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "lqb-runbar", children: [
       /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: blocked ? "lqb-status lqb-status-warn" : "lqb-status", role: "status", children: status }),
-      showLogql && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { type: "button", className: "lqb-link", "aria-expanded": logqlOpen, onClick: () => setLogqlOpen((x) => !x), children: logqlOpen ? labels.hideLogql : labels.showLogql }),
+      logqlToggle,
       actions,
-      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("button", { type: "button", className: isDirty || blocked ? "lqb-run" : "lqb-run lqb-run-idle", disabled: blocked || disabled || running, onClick: () => execute(), children: [
-        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("svg", { ...ICON, width: 14, height: 14, children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("path", { d: "M7 4l13 8-13 8z" }) }),
-        labels.execute
-      ] })
+      runButton
     ] }),
-    helpOpen && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
-      HelpDialog,
-      {
-        labels,
-        rootClass,
-        rootStyle: style,
-        theme: themeAttr,
-        syntax: shownSyntax,
-        notes: shownNotes,
-        shortcuts: globalShortcuts,
-        onPick: (q) => {
-          setHelpOpen(false);
-          commit(q);
-        },
-        onClose: closeHelp
-      }
-    )
+    helpDialog
   ] });
 });
 

@@ -11,7 +11,8 @@ export function quoteValue(v: string): string {
 
 export function termText(schema: ResolvedSchema, field: string, parts: ValuePart[], neg: boolean): string {
   const primary = schema.fields.get(field)?.primary ?? field
-  return `${neg ? '-' : ''}${primary}:${parts.map((p) => (p.wild ? p.v : quoteValue(p.v))).join(',')}`
+  const head = schema.operator === '=' ? `${primary}${neg ? ' != ' : ' = '}` : `${neg ? '-' : ''}${primary}:`
+  return `${head}${parts.map((p) => (p.wild ? p.v : quoteValue(p.v))).join(',')}`
 }
 
 export function tidy(q: string, schema: ResolvedSchema): string {

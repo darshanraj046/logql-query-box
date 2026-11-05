@@ -483,9 +483,9 @@ function testCond(c, r, schema, matchCase) {
     case "ends":
       return H.length >= N(v).length && H.slice(H.length - N(v).length) === N(v);
     case "regex":
-      return isRiskyRegex(v) || toJsRegex(v, ci, !isLine).test(hay);
+      return isRiskyRegex(v) || toJsRegex(v, ci, !isLine && !c.anywhere).test(hay);
     case "not_regex":
-      return isRiskyRegex(v) || !toJsRegex(v, ci, !isLine).test(hay);
+      return isRiskyRegex(v) || !toJsRegex(v, ci, !isLine && !c.anywhere).test(hay);
     case "in":
       return isLine ? listOf(c).some((x) => H.indexOf(N(x)) >= 0) : listOf(c).indexOf(hay) >= 0;
     case "not_in":
@@ -567,9 +567,9 @@ function pipelineMatcher(c) {
   const v = valOf(c);
   switch (c.op) {
     case "regex":
-      return `${n}=~${logqlString(`^(?:${v})$`)}`;
+      return `${n}=~${logqlString(c.anywhere ? `^(?s:.*)(?:${v})(?s:.*)$` : `^(?:${v})$`)}`;
     case "not_regex":
-      return `${n}!~${logqlString(`^(?:${v})$`)}`;
+      return `${n}!~${logqlString(c.anywhere ? `^(?s:.*)(?:${v})(?s:.*)$` : `^(?:${v})$`)}`;
     case "starts":
       return `${n}=~${logqlString(`^(?:${reEsc(v)}.*)$`)}`;
     case "ends":
@@ -592,9 +592,9 @@ function labelMatcher(c) {
     case "not_in":
       return `${n}!~${logqlString(L.map(reEsc).join("|"))}`;
     case "regex":
-      return `${n}=~${logqlString(v)}`;
+      return `${n}=~${logqlString(c.anywhere ? `.*(?:${v}).*` : v)}`;
     case "not_regex":
-      return `${n}!~${logqlString(v)}`;
+      return `${n}!~${logqlString(c.anywhere ? `.*(?:${v}).*` : v)}`;
     case "contains":
       return `${n}=~${logqlString(`.*${reEsc(v)}.*`)}`;
     case "not_contains":
@@ -770,7 +770,8 @@ function compile(tree, schema, matchCase, maxBranches) {
 }
 
 // src/core/tokenize.ts
-var FIELD = /([A-Za-z_][A-Za-z0-9_]*):/y;
+var FIELD = /([A-Za-z_][A-Za-z0-9_.]*):/y;
+var FIELD_EQ = /([A-Za-z_][A-Za-z0-9_.]*)\s*(!=|!~|=~|=|:)\s*/y;
 var WORD = /[^\s()]*/y;
 var LIST_ITEM = /[^\s(),]*/y;
 var SPACE = /\s/;
@@ -845,14 +846,18 @@ function tokenize(src, schema) {
       i++;
       continue;
     }
-    FIELD.lastIndex = i;
-    const m = FIELD.exec(src);
+    const eq = schema.operator === "=";
+    const fieldRe = eq ? FIELD_EQ : FIELD;
+    fieldRe.lastIndex = i;
+    const m = fieldRe.exec(src);
     const known = m ? schema.alias.get(m[1].toLowerCase()) : void 0;
+    const rx = !!m && !!known && (m[2] === "=~" || m[2] === "!~");
     if (m && known) {
       field = known;
       i += m[0].length;
+      if (m[2] === "!=" || m[2] === "!~") neg = !neg;
     }
-    if (field && field !== schema.lineField && !(src[i] === "/" && regexEndAt(src, i) > 0)) {
+    if (field && field !== schema.lineField && !rx && !(src[i] === "/" && regexEndAt(src, i) > 0)) {
       const parts = [];
       const quotes2 = [];
       while (i < n) {
@@ -867,8 +872,21 @@ function tokenize(src, schema) {
           if (bare) parts.push({ v: bare, wild: bare.includes("*") });
           i += bare.length;
         }
+        if (eq && src[i] !== ",") {
+          let j = i;
+          while (j < n && SPACE.test(src[j])) j++;
+          if (src[j] === ",") i = j;
+        }
         if (src[i] !== ",") break;
         i++;
+        if (eq) {
+          let j = i;
+          while (j < n && SPACE.test(src[j])) j++;
+          FIELD_EQ.lastIndex = j;
+          const next = FIELD_EQ.exec(src);
+          if (j === n || src[j] === "(" || src[j] === ")" || next && schema.alias.has(next[1].toLowerCase())) break;
+          i = j;
+        }
       }
       toks.push(parts.length ? { t: "term", neg, field, kind: "word", parts, quotes: quotes2, s, e: i } : { t: "skip", s, e: i });
       continue;
@@ -896,10 +914,22 @@ function tokenize(src, schema) {
       quotes = [[i, end + 1]];
       i = end + 1;
       kind = "regex";
+    } else if (rx) {
+      let j = i;
+      let depth = 0;
+      while (j < n && !SPACE.test(src[j])) {
+        if (src[j] === "\\") j++;
+        else if (src[j] === "(") depth++;
+        else if (src[j] === ")" && depth-- === 0) break;
+        j++;
+      }
+      value = src.slice(i, j);
+      i = j;
     } else {
       value = sticky(WORD, src, i);
       i += value.length;
     }
+    if (rx) kind = "regex";
     if (!field && !neg && kind === "word") {
       if (value === "OR") {
         toks.push({ t: "or", s, e: i });
@@ -998,9 +1028,19 @@ function parse(src, schema, known) {
     const neg = !!t.neg;
     if (f == null || f === schema.lineField) {
       if (t.kind === "regex") return C(schema.lineField, neg ? "not_regex" : "regex", t.value);
-      return C(schema.lineField, neg ? "not_contains" : "contains", t.value);
+      const v = t.value;
+      if (schema.operator === "=" && f === schema.lineField && t.kind === "word" && v.includes("*")) {
+        const pieces = v.replace(/^\*+|\*+$/g, "").split(/\*+/);
+        if (pieces.length > 1) return C(schema.lineField, neg ? "not_regex" : "regex", pieces.map(reEsc).join(".*"));
+        return C(schema.lineField, neg ? "not_contains" : "contains", pieces[0]);
+      }
+      return C(schema.lineField, neg ? "not_contains" : "contains", v);
     }
-    if (t.kind === "regex") return C(f, neg ? "not_regex" : "regex", t.value);
+    if (t.kind === "regex") {
+      const c2 = C(f, neg ? "not_regex" : "regex", t.value);
+      if (schema.operator === "=") c2.anywhere = true;
+      return c2;
+    }
     const parts = [];
     const seen = /* @__PURE__ */ new Set();
     for (const part of t.parts) {
@@ -1082,7 +1122,8 @@ function quoteValue(v) {
 }
 function termText(schema, field, parts, neg) {
   const primary = schema.fields.get(field)?.primary ?? field;
-  return `${neg ? "-" : ""}${primary}:${parts.map((p) => p.wild ? p.v : quoteValue(p.v)).join(",")}`;
+  const head = schema.operator === "=" ? `${primary}${neg ? " != " : " = "}` : `${neg ? "-" : ""}${primary}:`;
+  return `${head}${parts.map((p) => p.wild ? p.v : quoteValue(p.v)).join(",")}`;
 }
 function tidy(q, schema) {
   const tk = tokenize(q, schema);
@@ -1166,6 +1207,7 @@ function clearField(q, parsed, schema, field) {
 
 // src/core/schema.ts
 var LABEL_NAME = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+var ALIAS_NAME = /^[a-zA-Z_][a-zA-Z0-9_.]*$/;
 var defaultSchema = {
   fields: {
     detected_level: {
@@ -1248,7 +1290,7 @@ function resolveSchema(schema, baseSelector = {}) {
     }
     const names = [...def.aliases ?? [], name];
     for (const a of names) {
-      if (!LABEL_NAME.test(a)) throw new Error(`logql-query-box: "${a}" is not a valid field alias.`);
+      if (!ALIAS_NAME.test(a)) throw new Error(`logql-query-box: "${a}" is not a valid field alias.`);
       const key = a.toLowerCase();
       const taken = alias.get(key);
       if (taken && taken !== name) throw new Error(`logql-query-box: alias "${a}" is used by both "${taken}" and "${name}".`);
@@ -1279,14 +1321,16 @@ function resolveSchema(schema, baseSelector = {}) {
     lineField,
     parsedLine,
     selectorField,
-    excludeExample: schema.excludeExample ?? `${firstLabel ? firstLabel.primary : "field"}:value`,
+    excludeExample: schema.excludeExample ?? (schema.operator === "=" ? `${firstLabel ? firstLabel.primary : "field"} != value` : `${firstLabel ? firstLabel.primary : "field"}:value`),
     parser: schema.parser,
+    operator: schema.operator ?? ":",
     baseSelector: base
   };
 }
 
 // src/core/suggest.ts
-var FIELD_TERM = /^([A-Za-z_][A-Za-z0-9_]*):([\s\S]*)$/;
+var FIELD_TERM = /^([A-Za-z_][A-Za-z0-9_.]*)(:)([\s\S]*)$/;
+var FIELD_TERM_EQ = /^([A-Za-z_][A-Za-z0-9_.]*)(\s*(?:!=|!~|=~|=|:)\s*)([\s\S]*)$/;
 var NOTHING = { head: "", items: [], extra: [] };
 function hue(s) {
   let h = 0;
@@ -1338,6 +1382,28 @@ function suggest(src, caret, schema, known, extras = {}) {
   const neg = text[0] === "-" ? "-" : "";
   const body = neg ? text.slice(1) : text;
   const replace = [tk.s, tk.e];
+  const eq = schema.operator === "=";
+  if (eq && !text) {
+    const gap = (t) => !!t && /^\s+$/.test(src.slice(t.e, caret));
+    const lead = tokenize(src.slice(0, caret), schema).toks.filter((t) => t.t !== "skip").pop();
+    const target = lead && gap(lead) && lead.t === "term" && !lead.field && lead.kind === "word" ? schema.alias.get(lead.value.toLowerCase()) : void 0;
+    if (lead && target) {
+      const f = schema.fields.get(target);
+      const choices = target === schema.lineField ? [
+        ["=", "Contains this text. Use * as a wildcard"],
+        ["!=", "Does not contain this text"],
+        ["=~", "Matches a pattern (regular expression)"],
+        ["!~", "Does not match a pattern"]
+      ] : [
+        ["=", "Is one of the values you pick"],
+        ["!=", "Is not one of the values you pick"],
+        ["=~", "Contains some text, or matches a pattern"],
+        ["!~", "Does not contain the text or match the pattern"]
+      ];
+      for (const [o, hint] of choices) items.push({ kind: "operator", label: `${lead.value} ${o}`, hint, replace: [lead.s, caret], text: `${src.slice(lead.s, lead.e)} ${o} `, keep: true });
+      return { head: `How should ${f.label} match?`, items, extra: [] };
+    }
+  }
   if (text === "-") {
     for (const f of labelFields(schema)) {
       const label = `-${f.primary}:`;
@@ -1345,11 +1411,45 @@ function suggest(src, caret, schema, known, extras = {}) {
     }
     return { head: "Exclude (NOT). You can also type -word to hide lines containing it", items, extra: [] };
   }
-  const m = FIELD_TERM.exec(body);
+  const sep = eq ? " " : ":";
+  const m = (eq ? FIELD_TERM_EQ : FIELD_TERM).exec(body);
   const name = m ? schema.alias.get(m[1].toLowerCase()) : void 0;
+  const op = m ? m[2].trim() : "";
+  const regexOp = op === "=~" || op === "!~";
+  const isLine = name === schema.lineField;
+  if (eq && m && name && regexOp && !isLine) {
+    const field = schema.fields.get(name);
+    const head = `${neg}${m[1]}${m[2]}`;
+    if (!m[3]) {
+      const anchors = [
+        ["^", `Starts with the text you type next`, 1],
+        ["$", `Ends with the text you type next`, 0],
+        ["^$", `Is exactly the text you type next`, 1]
+      ];
+      for (const [a, hint, at] of anchors) items.push({ kind: "operator", label: a === "^$" ? "^ \u2026 $" : a === "^" ? "^ \u2026" : "\u2026 $", hint, replace, text: head + a, caret: head.length + at, keep: true });
+      return { head: "Pattern", items, extra: [], note: `Or just type some text to match any ${field.label} that contains it.` };
+    }
+    if (!m[3].replace(/^\^/, "").replace(/\$$/, "")) return { head: "", items: [], extra: [], note: `Now type the ${field.label} text.` };
+    const names = valueNames(field, known);
+    if (!names.length) return NOTHING;
+    let hits = [];
+    try {
+      if (isRiskyRegex(m[3])) return NOTHING;
+      const re = toJsRegex(m[3], false, false);
+      hits = names.filter((v) => re.test(v));
+    } catch {
+      return { head: "", items: [], extra: [], note: "This is not a complete pattern yet." };
+    }
+    const shown = hits.slice(0, 3).join(", ") + (hits.length > 3 ? ` and ${hits.length - 3} more` : "");
+    return { head: "", items: [], extra: [], note: hits.length ? `Matches ${hits.length} of ${names.length}: ${shown}` : `Matches no ${field.label}. ^ means starts with and $ means ends with, so ^text$ needs an exact name.` };
+  }
+  if (eq && m && name && (regexOp || isLine)) {
+    const note = !regexOp ? 'Type text to find in the log line. Use * as a wildcard and "quotes" for an exact phrase.' : isLine ? "Type a regular expression (RE2) to find in the log line, for example timeout|refused." : "Type a regular expression (RE2) found anywhere in the value, for example security. Use ^ and $ to anchor it, like ^checkout-";
+    return { head: "", items: [], extra: [], note: m[3] ? void 0 : note };
+  }
   if (m && name && name !== schema.lineField) {
     const field = schema.fields.get(name);
-    const rest = m[2];
+    const rest = m[3];
     const lc = rest.lastIndexOf(",");
     const prior = lc >= 0 ? rest.slice(0, lc + 1) : "";
     const part = (lc >= 0 ? rest.slice(lc + 1) : rest).toLowerCase();
@@ -1357,33 +1457,39 @@ function suggest(src, caret, schema, known, extras = {}) {
     const chosen = new Set((rest.endsWith(",") ? parts : parts.slice(0, -1)).map((p) => p.v.toLowerCase()));
     const all = valueOptions(field, known).filter((o) => !chosen.has(o.v.toLowerCase()));
     const pre = all.filter((o) => !part || o.v.toLowerCase().indexOf(part) === 0);
-    const hits = pre.length ? pre : all.filter((o) => o.v.toLowerCase().indexOf(part) >= 0);
+    const hits = eq && part ? [...pre, ...all.filter((o) => o.v.toLowerCase().indexOf(part) > 0)] : pre.length ? pre : all.filter((o) => o.v.toLowerCase().indexOf(part) >= 0);
     const counted = all.some((o) => o.n !== void 0);
     for (const o of hits) {
-      items.push({
-        kind: "value",
-        label: o.v,
-        hint: counted ? `${(o.n ?? 0).toLocaleString("en-US")} lines` : "",
-        color: colorOf(field, o.v),
-        replace,
-        text: `${neg}${m[1]}:${prior}${quoteValue(o.v)} `
-      });
+      items.push({ kind: "value", label: o.v, hint: counted ? `${(o.n ?? 0).toLocaleString("en-US")} lines` : "", color: colorOf(field, o.v), replace, text: `${neg}${m[1]}${m[2]}${prior}${quoteValue(o.v)} `, keep: eq || void 0 });
+    }
+    const typed = (lc >= 0 ? rest.slice(lc + 1) : rest).trim();
+    if (eq && typed.length > 1 && !typed.includes("*") && !all.some((o) => o.v.toLowerCase() === part) && hits.some((o) => o.v.toLowerCase().includes(part))) {
+      items.push({ kind: "value", label: `*${typed}*`, sub: `${op === "!=" ? "Every" : "Any"} ${field.label} containing \u201C${typed}\u201D`, replace, text: `${neg}${m[1]}${m[2]}${prior}*${typed}* `, keep: true });
     }
     return { head: `Values for ${field.label}`, field: name, items, extra: [] };
   }
   if (body) {
     const low = body.toLowerCase();
     for (const f of labelFields(schema)) {
-      const label = `${f.primary}:`;
-      if (label.toLowerCase().indexOf(low) === 0 && label.toLowerCase() !== low) {
-        items.push({ kind: "field", label: neg + label, hint: f.hint ?? `Filter by ${f.label}`, replace, text: neg + label, keep: true });
+      const label = `${f.primary}${sep}`;
+      if (label.toLowerCase().indexOf(low) === 0 && (eq || label.toLowerCase() !== low)) {
+        items.push({ kind: "field", label: neg + label.trimEnd(), hint: f.hint ?? `Filter by ${f.label}`, replace, text: neg + label, keep: true });
       }
+    }
+    if (eq && schema.fields.get(schema.lineField)?.aliases?.some((a) => a.toLowerCase().indexOf(low) === 0)) {
+      const f = schema.fields.get(schema.lineField);
+      items.push({ kind: "field", label: f.primary, hint: exampleOf(f, known), replace, text: `${neg}${f.primary} `, keep: true });
     }
     return { head: items.length ? "Fields" : "", items, extra: [] };
   }
   for (const f of labelFields(schema)) {
-    const label = `${f.primary}:`;
-    items.push({ kind: "field", label, hint: exampleOf(f, known), replace, text: label, keep: true });
+    const label = `${f.primary}${sep}`;
+    items.push({ kind: "field", label: label.trimEnd(), hint: exampleOf(f, known), replace, text: label, keep: true });
+  }
+  if (eq) {
+    const f = schema.fields.get(schema.lineField);
+    if (f.aliases?.length) items.push({ kind: "field", label: f.primary, hint: exampleOf(f, known), replace, text: `${f.primary} `, keep: true });
+    return { head: "Fields", items, extra: [] };
   }
   items.push({ kind: "field", label: "-", hint: `Exclude, for example -${schema.excludeExample}`, replace, text: "-", keep: true });
   const extra = [];
@@ -1433,16 +1539,38 @@ function createEngine(options = {}) {
     isNegative,
     analyze(query) {
       const parsed = parseQuery(query);
-      if (parsed.error) return { query, parsed, error: parsed.error, tree: null, logql: NO_LOGQL, filter: null, riskyRegex: false };
+      if (parsed.error) return { query, parsed, error: parsed.error, tree: null, logql: NO_LOGQL, filter: null, riskyRegex: false, unknownValues: [] };
       const found = problems(parsed.root);
       if (found.length) {
         const error2 = found.some((p) => p.startsWith("Loki")) ? "One of the /regular expressions/ is not valid for Loki. Loki uses RE2, so lookaround and backreferences do not work." : "One of the /regular expressions/ is not valid.";
-        return { query, parsed, error: error2, tree: null, logql: NO_LOGQL, filter: null, riskyRegex: false };
+        return { query, parsed, error: error2, tree: null, logql: NO_LOGQL, filter: null, riskyRegex: false, unknownValues: [] };
       }
       const tree = activeExpanded(parsed.root);
       const logql = compileTree(tree);
       const error = logql.tooMany ? `This filter expands into ${logql.count} OR branches. Use comma lists such as level:error,warn to stay under ${maxBranches}.` : null;
-      return { query, parsed, error, tree, logql, filter: tree ? toFilter(tree) : null, riskyRegex: !!tree && hasRiskyRegex(tree) };
+      const unknownValues = [];
+      for (const n of parsed.children) {
+        if (n.type !== "cond") continue;
+        const f = schema.fields.get(n.field);
+        const names = [.../* @__PURE__ */ new Set([...f?.values ?? [], ...known.get(n.field)?.keys() ?? []])];
+        if (!f || !names.length || n.field === schema.lineField) continue;
+        if (!n.parts) {
+          const v = valOf(n);
+          if (n.op !== "regex" && n.op !== "not_regex" || isRiskyRegex(v)) continue;
+          const re = toJsRegex(v, false, !n.anywhere);
+          if (names.some((name) => re.test(name))) continue;
+          const lit = v.replace(/^\^/, "").replace(/\$$/, "").toLowerCase();
+          const matches = /^[\w.-]+$/.test(lit) ? names.filter((name) => name.toLowerCase().includes(lit)).slice(0, 3) : [];
+          unknownValues.push({ field: n.field, value: v, negative: isNegative(n), matches, regex: true });
+          continue;
+        }
+        for (const p of n.parts) {
+          const low = p.v.toLowerCase();
+          if (p.wild || !low || f.groups.has(low) || names.some((v) => v.toLowerCase() === low)) continue;
+          unknownValues.push({ field: n.field, value: p.v, negative: isNegative(n), matches: names.filter((v) => v.toLowerCase().includes(low)).slice(0, 3) });
+        }
+      }
+      return { query, parsed, error, tree, logql, filter: tree ? toFilter(tree) : null, riskyRegex: !!tree && hasRiskyRegex(tree), unknownValues };
     },
     validate(query) {
       const parsed = parseQuery(query);
@@ -1472,6 +1600,24 @@ function createEngine(options = {}) {
     appendTerm: (query, field, values, negative = false) => appendTerm(query, termText(schema, field, values.map((v) => ({ v, wild: false })), negative), schema),
     toggleValue,
     clearField: (query, field) => clearField(query, parseQuery(query), schema, field),
+    combine(query) {
+      let q = query;
+      for (let pass = 0; pass < 50; pass++) {
+        const parsed = parseQuery(q);
+        const node = parsed.error ? void 0 : parsed.children.find((n) => n.type === "cond" && !!n.parts && n.spans.length > 1);
+        if (!node) return q;
+        q = editSpans(q, node.spans, termText(schema, node.field, node.parts, isNegative(node)), schema);
+      }
+      return q;
+    },
+    replaceValue(query, field, from, to, negative = false) {
+      const parsed = parseQuery(query);
+      const node = parsed.error ? void 0 : parsed.children.find((n) => n.type === "cond" && n.field === field && isNegative(n) === negative && (n.parts ? n.parts.some((p) => p.v === from) : valOf(n) === from));
+      if (!node) return query;
+      if (!node.parts) return editSpans(query, node.spans, termText(schema, field, [{ v: to, wild: to.includes("*") }], negative), schema);
+      const parts = node.parts.map((p) => p.v === from ? { v: to, wild: to.includes("*") } : p);
+      return editSpans(query, node.spans, termText(schema, field, parts, negative), schema);
+    },
     activeValues: (query, field, negative = false) => activeValues(parseQuery(query), field, negative)
   };
 }

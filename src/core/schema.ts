@@ -21,6 +21,7 @@ export interface Schema {
   selectorField?: string
   excludeExample?: string
   parser?: LogParser
+  operator?: ':' | '='
 }
 
 export interface ResolvedField extends Omit<FieldDef, 'synonyms' | 'groups'> {
@@ -39,10 +40,12 @@ export interface ResolvedSchema {
   selectorField: string
   excludeExample: string
   parser?: LogParser
+  operator: ':' | '='
   baseSelector: [string, string][]
 }
 
 const LABEL_NAME = /^[a-zA-Z_][a-zA-Z0-9_]*$/
+const ALIAS_NAME = /^[a-zA-Z_][a-zA-Z0-9_.]*$/
 
 export const defaultSchema: Schema = {
   fields: {
@@ -129,7 +132,7 @@ export function resolveSchema(schema: Schema, baseSelector: Record<string, strin
     }
     const names = [...(def.aliases ?? []), name]
     for (const a of names) {
-      if (!LABEL_NAME.test(a)) throw new Error(`logql-query-box: "${a}" is not a valid field alias.`)
+      if (!ALIAS_NAME.test(a)) throw new Error(`logql-query-box: "${a}" is not a valid field alias.`)
       const key = a.toLowerCase()
       const taken = alias.get(key)
       if (taken && taken !== name) throw new Error(`logql-query-box: alias "${a}" is used by both "${taken}" and "${name}".`)
@@ -161,8 +164,9 @@ export function resolveSchema(schema: Schema, baseSelector: Record<string, strin
     lineField,
     parsedLine,
     selectorField,
-    excludeExample: schema.excludeExample ?? `${firstLabel ? firstLabel.primary : 'field'}:value`,
+    excludeExample: schema.excludeExample ?? (schema.operator === '=' ? `${firstLabel ? firstLabel.primary : 'field'} != value` : `${firstLabel ? firstLabel.primary : 'field'}:value`),
     parser: schema.parser,
+    operator: schema.operator ?? ':',
     baseSelector: base
   }
 }

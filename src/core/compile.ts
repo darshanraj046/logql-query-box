@@ -46,9 +46,9 @@ function pipelineMatcher(c: Cond): string {
   const v = valOf(c)
   switch (c.op) {
     case 'regex':
-      return `${n}=~${logqlString(`^(?:${v})$`)}`
+      return `${n}=~${logqlString(c.anywhere ? `^(?s:.*)(?:${v})(?s:.*)$` : `^(?:${v})$`)}`
     case 'not_regex':
-      return `${n}!~${logqlString(`^(?:${v})$`)}`
+      return `${n}!~${logqlString(c.anywhere ? `^(?s:.*)(?:${v})(?s:.*)$` : `^(?:${v})$`)}`
     case 'starts':
       return `${n}=~${logqlString(`^(?:${reEsc(v)}.*)$`)}`
     case 'ends':
@@ -72,9 +72,9 @@ function labelMatcher(c: Cond): string {
     case 'not_in':
       return `${n}!~${logqlString(L.map(reEsc).join('|'))}`
     case 'regex':
-      return `${n}=~${logqlString(v)}`
+      return `${n}=~${logqlString(c.anywhere ? `.*(?:${v}).*` : v)}`
     case 'not_regex':
-      return `${n}!~${logqlString(v)}`
+      return `${n}!~${logqlString(c.anywhere ? `.*(?:${v}).*` : v)}`
     case 'contains':
       return `${n}=~${logqlString(`.*${reEsc(v)}.*`)}`
     case 'not_contains':

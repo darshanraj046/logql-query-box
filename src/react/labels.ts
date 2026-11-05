@@ -29,6 +29,42 @@ export interface Labels {
   suggestionCount: (count: number) => string
   loadingValues: string
   savedAndRecent: string
+  filterPlaceholder: string
+  queries: string
+  searchSaved: string
+  pinnedHead: string
+  allSavedHead: string
+  pinnedBadge: string
+  noSaved: string
+  noSavedMatch: string
+  loadingSaved: string
+  saveShort: string
+  createAlert: string
+  copyQuery: string
+  runQuery: string
+  pinShort: string
+  unpinShort: string
+  editShort: string
+  removeShort: string
+  pin: (name: string) => string
+  unpin: (name: string) => string
+  edit: (name: string) => string
+  remove: (name: string) => string
+  alertFor: (name: string) => string
+  unknownValue: (label: string, value: string, negative: boolean, hasMatches: boolean) => string
+  containing: (label: string, value: string, negative: boolean) => string
+  hiddenFilters: (count: number) => string
+  confirmRemove: (name: string) => string
+  removing: string
+  unknownPattern: (label: string, pattern: string, negative: boolean, hasMatches: boolean) => string
+  startingWith: (label: string, value: string, negative: boolean) => string
+  saveAs: string
+  pinToTop: string
+  cancel: string
+  update: string
+  saving: string
+  nameLabel: string
+  queryLabel: string
 }
 
 export const defaultLabels: Labels = {
@@ -61,7 +97,43 @@ export const defaultLabels: Labels = {
   moreFilters: (count) => `+${count} more`,
   suggestionCount: (count) => `${count} ${count === 1 ? 'suggestion' : 'suggestions'} available`,
   loadingValues: 'Loading values…',
-  savedAndRecent: 'Saved and recent'
+  savedAndRecent: 'Saved and recent',
+  filterPlaceholder: 'Type to filter',
+  queries: 'Queries',
+  searchSaved: 'Search saved queries',
+  pinnedHead: 'Pinned',
+  allSavedHead: 'All saved',
+  pinnedBadge: 'Pinned',
+  noSaved: 'No saved queries yet. Type a filter and press Save.',
+  noSavedMatch: 'No saved queries match.',
+  loadingSaved: 'Loading saved queries…',
+  saveShort: 'Save',
+  createAlert: 'Create alert',
+  copyQuery: 'Copy query',
+  runQuery: 'Run query',
+  pinShort: 'Pin',
+  unpinShort: 'Unpin',
+  editShort: 'Edit',
+  removeShort: 'Delete',
+  pin: (name) => `Pin ${name}`,
+  unpin: (name) => `Unpin ${name}`,
+  edit: (name) => `Edit ${name}`,
+  remove: (name) => `Delete ${name}`,
+  alertFor: (name) => `Create an alert from ${name}`,
+  unknownValue: (label, value, negative, hasMatches) => `No ${label} is exactly “${value}”, so ${negative ? 'nothing was excluded' : 'nothing matches it'}.${hasMatches ? ' Did you mean:' : ' Check the spelling.'}`,
+  containing: (label, value, negative) => `${negative ? 'Every' : 'Any'} ${label} containing “${value}”`,
+  unknownPattern: (label, pattern, negative, hasMatches) => `No ${label} matches “${pattern}”, so ${negative ? 'nothing was excluded' : 'nothing matches it'}. ^ means starts with and $ means ends with.${hasMatches ? ' Did you mean:' : ''}`,
+  startingWith: (label, value, negative) => `${negative ? 'Every' : 'Any'} ${label} starting with “${value}”`,
+  confirmRemove: (name) => `Delete “${name}”?`,
+  removing: 'Deleting…',
+  hiddenFilters: (count) => `+${count} ${count === 1 ? 'filter' : 'filters'}`,
+  saveAs: 'Save query as',
+  pinToTop: 'Pin to the top of Queries',
+  cancel: 'Cancel',
+  update: 'Update',
+  saving: 'Saving…',
+  nameLabel: 'Name',
+  queryLabel: 'Query'
 }
 
 export const defaultExamples = ['level:error,warn', 'level:error (timeout OR refused)', 'apptype:java /\\w+Exception/', '-level:debug']
