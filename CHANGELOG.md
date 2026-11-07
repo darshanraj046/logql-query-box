@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.5.0
+
+Added:
+
+- `maxSuggestions` (default `100`): value lists show at most that many rows, with a "N more. Keep typing to narrow the list." line. Label: `moreValues`. Headless: `limit` in `suggest()` extras, and `more` on the result.
+- `searchValues`: calls `loadValues` again while someone types a value, debounced, with the typed text in the new `search` context field. Answers are cached per field and text, and stale answers are dropped. `SuggestionList.search` holds the typed text for headless use.
+- `Ctrl+Enter` or `Cmd+Enter` runs exactly what was typed, even while a value is highlighted. Listed in the help dialog.
+
+Changed:
+
+- `SavedQuery.id` is `string | number`.
+- Sourcemaps no longer embed the source, which roughly halves the package size.
+
+Docs:
+
+- Quoted values are literal, how case works for free text and field values, `level:none` and Loki's `discover_log_levels`, and an "Upgrading from 0.4" section.
+
 ## 0.4.0
 
 Added:

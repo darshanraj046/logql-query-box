@@ -8,7 +8,10 @@ export default defineConfig([
     dts: true,
     clean: true,
     sourcemap: true,
-    target: 'es2020'
+    target: 'es2020',
+    esbuildOptions(options) {
+      options.sourcesContent = false
+    }
   },
   {
     entry: { index: 'src/index.ts' },
@@ -18,6 +21,9 @@ export default defineConfig([
     target: 'es2020',
     external: ['react', 'react-dom'],
     banner: { js: '"use client";' },
+    esbuildOptions(options) {
+      options.sourcesContent = false
+    },
     esbuildPlugins: [
       {
         name: 'share-core',

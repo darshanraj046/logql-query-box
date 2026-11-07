@@ -21,6 +21,7 @@ const CHIP_LIMIT = 50
 const MENU_GAP = 6
 const MENU_MAX = 300
 const MENU_MIN = 120
+const SEARCH_DELAY = 250
 const ICON = { width: 17, height: 17, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true } as const
 
 export interface LogQLQueryBoxHandle {
@@ -61,7 +62,9 @@ export interface LogQLQueryBoxProps {
   engine?: Engine
   schema?: Schema
   values?: FieldValues
-  loadValues?: (field: string, context: { signal: AbortSignal }) => Promise<FieldValue[]>
+  loadValues?: (field: string, context: { signal: AbortSignal; search: string }) => Promise<FieldValue[]>
+  searchValues?: boolean
+  maxSuggestions?: number
   matchCase?: boolean
   maxBranches?: number
   baseSelector?: Record<string, string>
@@ -139,6 +142,8 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
     schema,
     values,
     loadValues,
+    searchValues = false,
+    maxSuggestions = 100,
     matchCase,
     maxBranches,
     baseSelector,
@@ -215,6 +220,8 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
   const mountRan = useRef(false)
   const loader = useRef(loadValues)
   const requested = useRef(new Set<string>())
+  const cache = useRef(new Map<string, FieldValue[]>())
+  const latest = useRef(new Map<string, string>())
   const loadAbort = useRef<AbortController | null>(null)
   loader.current = loadValues
 
@@ -227,11 +234,12 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
   const recentList = recent ?? storedRecent
   const interactive = !disabled && !readOnly
 
-  const sugg = useMemo(() => (menu && interactive ? engine.suggest(query, menu.caret, bar ? {} : { saved, recent: recentList }) : null), [menu, interactive, engine, query, saved, recentList, bar])
+  const sugg = useMemo(() => (menu && interactive ? engine.suggest(query, menu.caret, bar ? { limit: maxSuggestions } : { saved, recent: recentList, limit: maxSuggestions }) : null), [menu, interactive, engine, query, saved, recentList, bar, maxSuggestions])
   const items = useMemo<Suggestion[]>(() => (sugg ? [...sugg.items, ...sugg.extra] : []), [sugg])
   const open = items.length > 0
   const at = menu ? Math.min(menu.at, items.length - 1) : -1
   const valueField = sugg?.field
+  const search = searchValues && valueField ? (sugg?.search ?? '') : ''
   const waiting = !!valueField && loading.includes(valueField)
   const note = sugg?.note
   const shown = open || waiting || !!note
@@ -249,6 +257,8 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
     const controller = new AbortController()
     loadAbort.current = controller
     requested.current.clear()
+    cache.current.clear()
+    latest.current.clear()
     setLoaded((x) => (Object.keys(x).length ? {} : x))
     setLoading((x) => (x.length ? [] : x))
     return () => controller.abort()
@@ -257,20 +267,36 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
   useEffect(() => {
     const load = loader.current
     const controller = loadAbort.current
-    if (!valueField || !load || !controller || props.engine || requested.current.has(valueField)) return
+    if (!valueField || !load || !controller || props.engine) return
     const field = valueField
-    requested.current.add(field)
-    setLoading((x) => [...x, field])
+    const key = searchValues ? `${field}\u0000${search}` : field
+    latest.current.set(field, key)
+    const hit = cache.current.get(key)
+    if (hit) {
+      setLoaded((x) => (x[field] === hit ? x : { ...x, [field]: hit }))
+      setLoading((x) => (x.includes(field) ? x.filter((f) => f !== field) : x))
+      return
+    }
+    if (requested.current.has(key)) return
     const finish = (list?: FieldValue[]) => {
       if (controller.signal.aborted) return
+      if (Array.isArray(list)) cache.current.set(key, list)
+      else requested.current.delete(key)
+      if (latest.current.get(field) !== key) return
       if (Array.isArray(list)) setLoaded((x) => ({ ...x, [field]: list }))
-      else requested.current.delete(field)
       setLoading((x) => x.filter((f) => f !== field))
     }
-    Promise.resolve()
-      .then(() => load(field, { signal: controller.signal }))
-      .then(finish, () => finish())
-  }, [valueField, baseKey, props.engine])
+    const run = () => {
+      requested.current.add(key)
+      setLoading((x) => (x.includes(field) ? x : [...x, field]))
+      Promise.resolve()
+        .then(() => load(field, { signal: controller.signal, search }))
+        .then(finish, () => finish())
+    }
+    if (!searchValues) return run()
+    const timer = setTimeout(run, SEARCH_DELAY)
+    return () => clearTimeout(timer)
+  }, [valueField, baseKey, props.engine, searchValues, search])
 
   useIsoLayoutEffect(() => {
     if (pendingCaret.current === null) return
@@ -315,8 +341,8 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
   }, [shown, items, waiting])
 
   const [draft, setDraft] = useState<{ name: string; pinned: boolean; error: string; busy: boolean } | null>(null)
-  const [removing, setRemoving] = useState<{ key: string; error: string; busy: boolean } | null>(null)
-  const [editing, setEditing] = useState<{ key: string; name: string; query: string; error: string; busy: boolean } | null>(null)
+  const [removing, setRemoving] = useState<{ key: string | number; error: string; busy: boolean } | null>(null)
+  const [editing, setEditing] = useState<{ key: string | number; name: string; query: string; error: string; busy: boolean } | null>(null)
   const saveBtnRef = useRef<HTMLButtonElement>(null)
   const savePopRef = useRef<HTMLDivElement>(null)
   const expanded = bar && (focused || !!draft) && !qOpen && !!query
@@ -500,7 +526,7 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
       }
     } else if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      const it = open ? items[at] : undefined
+      const it = open && !e.metaKey && !e.ctrlKey ? items[at] : undefined
       const cur = currentToken()
       if (it?.kind === 'value' && (cur.indexOf(':') > 0 || (engine.schema.operator === '=' && cur.indexOf('=') > 0)) && it.text?.trim() !== cur) accept(at)
       else if (it?.whole != null && !cur && !query.trim()) accept(at)
@@ -649,6 +675,7 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
           {sugg.items.map((it, i) => row(it, i))}
         </div>
       )}
+      {!!sugg.more && <div className="lqb-sg-note lqb-sg-more">{labels.moreValues(sugg.more)}</div>}
       {note && <div className="lqb-sg-note">{note}</div>}
       {sugg.extra.length > 0 && (
         <div role="group" aria-label={sugg.extraHead ?? labels.savedAndRecent}>

@@ -98,17 +98,21 @@ With a `parser` on the schema, an OR stays in one query whenever LogQL can expre
 | `-app:a,b` | Exclude several values |
 | `app:checkout-*` | Wildcard, also inside lists: `app:a-*,b` |
 | `app:"my service",other` | Quote values with spaces or commas |
+| `app:"build*"` | A quoted value is literal, so `*` is a plain star there |
 | `a OR b`, `a AND b` | Boolean operators, uppercase. AND binds tighter |
 | `level:error (timeout OR refused)` | Group with brackets |
 | `-(timeout OR refused)` | Exclude a whole group |
 
 Half typed input stays valid, so `a OR` or `level:` never shows an error while someone is still typing.
 
+Free text is not case sensitive. Field values are exact, so `app:Billing` and `app:billing` differ, except when the field has known values (through `values`, `loadValues` or the schema): then what was typed is folded to the known spelling. Schema fields with `lowercase: true` are lowered before compiling.
+
 ## Keyboard
 
 | Key | Action |
 | --- | --- |
 | `Enter` | Run, or complete a highlighted value |
+| `Ctrl+Enter` / `Cmd+Enter` | Run exactly what was typed, even when a value is highlighted |
 | `Shift+Enter` | New line |
 | `Tab` | Accept the highlighted suggestion |
 | `Up` / `Down` | Move through suggestions |
@@ -125,7 +129,9 @@ Half typed input stays valid, so `a OR` or `level:` never shows an error while s
 | `onExecute` | `(analysis) => void` | | Fires when a valid filter runs. |
 | `onSave` | `(query, existing?) => void` | | Shows a save button. `existing` is set if this query is already saved. |
 | `values` | `FieldValues` | | Known values per field, plain strings or `{ value, count }`. Can change at any time. |
-| `loadValues` | `(field, { signal }) => Promise<FieldValue[]>` | | Fetches a field's values the first time someone picks one. See [Loading values on demand](#loading-values-on-demand). |
+| `loadValues` | `(field, { signal, search }) => Promise<FieldValue[]>` | | Fetches a field's values the first time someone picks one. See [Loading values on demand](#loading-values-on-demand). |
+| `searchValues` | `boolean` | `false` | Calls `loadValues` again as someone types a value, with the typed text in `search`, so the server can filter fields with many values. |
+| `maxSuggestions` | `number` | `100` | Most value rows shown at once. A line under the list says how many more match. |
 | `schema` | `Schema` | Loki defaults | Fields and aliases. See below. |
 | `engine` | `Engine` | | A ready engine. Replaces `schema`, `values`, `loadValues`, `matchCase`, `maxBranches` and `baseSelector`. |
 | `matchCase` | `boolean` | `false` | Case sensitive line matching. |
@@ -250,7 +256,20 @@ Use `loadValues` when the list of values is too large or changes too often to fe
 - The result is the same shape as `values`: plain strings or `{ value, count }`. It replaces what `values` holds for that field.
 - When `baseSelector` changes, the running request is aborted through `signal` and values load again for the new stream.
 - If it fails, the box keeps working with what it has and tries again the next time the list opens.
+- With `searchValues`, it also runs as someone types, 250 ms after they stop, with the typed text in `search` (an empty string before anything is typed). Each answer is cached per field and text, an answer that arrives after the text changed is ignored, and the box still filters what comes back.
 - It does not run when you pass a ready `engine`. Headless code can do the same thing using `suggest().field`, which names the field while a value is being picked.
+
+For a field with many values, let the server filter:
+
+```tsx
+<LogQLQueryBox
+  searchValues
+  loadValues={async (field, { signal, search }) => {
+    const res = await fetch(`/api/logs/values?index=${index}&field=${field}&q=${encodeURIComponent(search)}&limit=100`, { signal })
+    return res.json()
+  }}
+/>
+```
 
 ### Logs stored as JSON
 
@@ -571,6 +590,12 @@ By default the open editor floats over the page instead of pushing it down. To p
 .lqb-bar { position: relative; }
 ```
 
+## Upgrading from 0.4
+
+- Value suggestions now show at most 100 rows, with a "N more" line under them. Pass `maxSuggestions` to change that. `engine.suggest()` is unchanged unless you pass `limit` in its extras, and then returns `more` with the count left out.
+- `loadValues` receives `search` too. It is `''` unless `searchValues` is on, so existing loaders keep working.
+- `SavedQuery.id` may be a number.
+
 ## Upgrading from 0.3
 
 - `showHelp` and `showLogql` now default to `false`. Pass them to keep the Search help link and the Show LogQL toggle.
@@ -591,6 +616,7 @@ Generated queries are tested against a real Loki server, which surfaced behavior
 
 - **Risky regexes do not run in the browser.** Loki uses RE2, which stays fast on any pattern. The JavaScript regex engine can stall on patterns such as `(a+)+b`, even on a short line, and it cannot be interrupted. These patterns are detected first: `evaluate()` does not apply that condition, `highlightPattern()` leaves it out, and `analysis.riskyRegex` is `true`. The query still compiles and runs on Loki as normal. The check is cautious, so a few harmless patterns are skipped too, such as `(a+b)+`. Use `isRiskyRegex(pattern)` to ask the same question in your own code.
 - `evaluate()` runs on the JavaScript regex engine after translating RE2 syntax. Flags set in the middle of a pattern, such as `a(?i)b`, are validated but not applied there. Loki itself handles them correctly, so only client side filtering is affected.
+- `level:none` in the default schema compiles to `detected_level="unknown"`. Loki fills `detected_level` only when `discover_log_levels` is on, which is its default, and then gives `unknown` to lines with no level it can find. `evaluate()` sees only the fields in the records you pass it, so for client side filtering include `detected_level` in each record, or map `none` to a value your logs carry through `synonyms`, or use your own level field.
 - Only the first 50 chips are shown, followed by a count of the rest. The filter still uses every term.
 - The component builds queries. Running them, time ranges and results are yours, which keeps it usable with any backend.
 

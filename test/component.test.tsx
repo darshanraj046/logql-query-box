@@ -1131,7 +1131,7 @@ describe('loadValues prop', () => {
     expect(await screen.findByRole('option', { name: /from-api/ })).toHaveTextContent('7 lines')
     await user.type(box(), 'f')
     expect(loadValues).toHaveBeenCalledTimes(1)
-    expect(loadValues.mock.calls[0]).toEqual(['service_name', { signal: expect.any(AbortSignal) }])
+    expect(loadValues.mock.calls[0]).toEqual(['service_name', { signal: expect.any(AbortSignal), search: '' }])
   })
 
   it('does not load until a value is being picked', async () => {

@@ -121,7 +121,7 @@ interface UnknownValue {
     regex?: boolean;
 }
 interface SavedQuery {
-    id?: string;
+    id?: string | number;
     name: string;
     query: string;
     pinned?: boolean;
@@ -145,10 +145,13 @@ interface SuggestionList {
     extra: Suggestion[];
     extraHead?: string;
     note?: string;
+    search?: string;
+    more?: number;
 }
 interface SuggestExtras {
     saved?: SavedQuery[];
     recent?: string[];
+    limit?: number;
 }
 type FieldValue = string | {
     value: string;
@@ -239,6 +242,7 @@ interface Labels {
     moreFilters: (count: number) => string;
     suggestionCount: (count: number) => string;
     loadingValues: string;
+    moreValues: (count: number) => string;
     savedAndRecent: string;
     filterPlaceholder: string;
     queries: string;
@@ -329,7 +333,10 @@ interface LogQLQueryBoxProps {
     values?: FieldValues;
     loadValues?: (field: string, context: {
         signal: AbortSignal;
+        search: string;
     }) => Promise<FieldValue[]>;
+    searchValues?: boolean;
+    maxSuggestions?: number;
     matchCase?: boolean;
     maxBranches?: number;
     baseSelector?: Record<string, string>;

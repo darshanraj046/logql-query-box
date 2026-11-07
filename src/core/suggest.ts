@@ -159,14 +159,15 @@ export function suggest(src: string, caret: number, schema: ResolvedSchema, know
     const pre = all.filter((o) => !part || o.v.toLowerCase().indexOf(part) === 0)
     const hits = eq && part ? [...pre, ...all.filter((o) => o.v.toLowerCase().indexOf(part) > 0)] : pre.length ? pre : all.filter((o) => o.v.toLowerCase().indexOf(part) >= 0)
     const counted = all.some((o) => o.n !== undefined)
-    for (const o of hits) {
+    const cap = extras.limit && extras.limit > 0 ? extras.limit : hits.length
+    for (const o of hits.slice(0, cap)) {
       items.push({ kind: 'value', label: o.v, hint: counted ? `${(o.n ?? 0).toLocaleString('en-US')} lines` : '', color: colorOf(field, o.v), replace, text: `${neg}${m[1]}${m[2]}${prior}${quoteValue(o.v)} `, keep: eq || undefined })
     }
     const typed = (lc >= 0 ? rest.slice(lc + 1) : rest).trim()
     if (eq && typed.length > 1 && !typed.includes('*') && !all.some((o) => o.v.toLowerCase() === part) && hits.some((o) => o.v.toLowerCase().includes(part))) {
       items.push({ kind: 'value', label: `*${typed}*`, sub: `${op === '!=' ? 'Every' : 'Any'} ${field.label} containing “${typed}”`, replace, text: `${neg}${m[1]}${m[2]}${prior}*${typed}* `, keep: true })
     }
-    return { head: `Values for ${field.label}`, field: name, items, extra: [] }
+    return { head: `Values for ${field.label}`, field: name, items, extra: [], search: typed, more: hits.length > cap ? hits.length - cap : undefined }
   }
 
   if (body) {

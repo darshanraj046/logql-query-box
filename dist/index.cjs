@@ -104,6 +104,14 @@ function HelpDialog({ labels, rootClass, rootStyle, theme, syntax, notes, shortc
                 /* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Enter" })
               ] }),
               /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
+                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "Run exactly what you typed" }),
+                /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Ctrl" }),
+                  " ",
+                  /* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Enter" })
+                ] })
+              ] }),
+              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
                 /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { children: "New line" }),
                 /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
                   /* @__PURE__ */ (0, import_jsx_runtime.jsx)("kbd", { children: "Shift" }),
@@ -167,6 +175,7 @@ var defaultLabels = {
   moreFilters: (count) => `+${count} more`,
   suggestionCount: (count) => `${count} ${count === 1 ? "suggestion" : "suggestions"} available`,
   loadingValues: "Loading values\u2026",
+  moreValues: (count) => `${count.toLocaleString("en-US")} more. Keep typing to narrow the list.`,
   savedAndRecent: "Saved and recent",
   filterPlaceholder: "Type to filter",
   queries: "Queries",
@@ -235,6 +244,7 @@ var CHIP_LIMIT = 50;
 var MENU_GAP = 6;
 var MENU_MAX = 300;
 var MENU_MIN = 120;
+var SEARCH_DELAY = 250;
 var ICON = { width: 17, height: 17, viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: 1.7, strokeLinecap: "round", strokeLinejoin: "round", "aria-hidden": true };
 function readRecent(key) {
   try {
@@ -281,6 +291,8 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
     schema,
     values,
     loadValues,
+    searchValues = false,
+    maxSuggestions = 100,
     matchCase,
     maxBranches,
     baseSelector,
@@ -355,6 +367,8 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
   const mountRan = (0, import_react2.useRef)(false);
   const loader = (0, import_react2.useRef)(loadValues);
   const requested = (0, import_react2.useRef)(/* @__PURE__ */ new Set());
+  const cache = (0, import_react2.useRef)(/* @__PURE__ */ new Map());
+  const latest = (0, import_react2.useRef)(/* @__PURE__ */ new Map());
   const loadAbort = (0, import_react2.useRef)(null);
   loader.current = loadValues;
   const baseId = (0, import_react2.useId)();
@@ -364,11 +378,12 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
   const analysis = (0, import_react2.useMemo)(() => engine.analyze(query), [engine, query]);
   const recentList = recent ?? storedRecent;
   const interactive = !disabled && !readOnly;
-  const sugg = (0, import_react2.useMemo)(() => menu && interactive ? engine.suggest(query, menu.caret, bar ? {} : { saved, recent: recentList }) : null, [menu, interactive, engine, query, saved, recentList, bar]);
+  const sugg = (0, import_react2.useMemo)(() => menu && interactive ? engine.suggest(query, menu.caret, bar ? { limit: maxSuggestions } : { saved, recent: recentList, limit: maxSuggestions }) : null, [menu, interactive, engine, query, saved, recentList, bar, maxSuggestions]);
   const items = (0, import_react2.useMemo)(() => sugg ? [...sugg.items, ...sugg.extra] : [], [sugg]);
   const open = items.length > 0;
   const at = menu ? Math.min(menu.at, items.length - 1) : -1;
   const valueField = sugg?.field;
+  const search = searchValues && valueField ? sugg?.search ?? "" : "";
   const waiting = !!valueField && loading.includes(valueField);
   const note = sugg?.note;
   const shown = open || waiting || !!note;
@@ -383,6 +398,8 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
     const controller = new AbortController();
     loadAbort.current = controller;
     requested.current.clear();
+    cache.current.clear();
+    latest.current.clear();
     setLoaded((x) => Object.keys(x).length ? {} : x);
     setLoading((x) => x.length ? [] : x);
     return () => controller.abort();
@@ -390,18 +407,34 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
   (0, import_react2.useEffect)(() => {
     const load = loader.current;
     const controller = loadAbort.current;
-    if (!valueField || !load || !controller || props.engine || requested.current.has(valueField)) return;
+    if (!valueField || !load || !controller || props.engine) return;
     const field = valueField;
-    requested.current.add(field);
-    setLoading((x) => [...x, field]);
+    const key = searchValues ? `${field}\0${search}` : field;
+    latest.current.set(field, key);
+    const hit = cache.current.get(key);
+    if (hit) {
+      setLoaded((x) => x[field] === hit ? x : { ...x, [field]: hit });
+      setLoading((x) => x.includes(field) ? x.filter((f) => f !== field) : x);
+      return;
+    }
+    if (requested.current.has(key)) return;
     const finish = (list) => {
       if (controller.signal.aborted) return;
+      if (Array.isArray(list)) cache.current.set(key, list);
+      else requested.current.delete(key);
+      if (latest.current.get(field) !== key) return;
       if (Array.isArray(list)) setLoaded((x) => ({ ...x, [field]: list }));
-      else requested.current.delete(field);
       setLoading((x) => x.filter((f) => f !== field));
     };
-    Promise.resolve().then(() => load(field, { signal: controller.signal })).then(finish, () => finish());
-  }, [valueField, baseKey, props.engine]);
+    const run = () => {
+      requested.current.add(key);
+      setLoading((x) => x.includes(field) ? x : [...x, field]);
+      Promise.resolve().then(() => load(field, { signal: controller.signal, search })).then(finish, () => finish());
+    };
+    if (!searchValues) return run();
+    const timer = setTimeout(run, SEARCH_DELAY);
+    return () => clearTimeout(timer);
+  }, [valueField, baseKey, props.engine, searchValues, search]);
   useIsoLayoutEffect(() => {
     if (pendingCaret.current === null) return;
     const el = inputRef.current;
@@ -612,7 +645,7 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
       }
     } else if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      const it = open ? items[at] : void 0;
+      const it = open && !e.metaKey && !e.ctrlKey ? items[at] : void 0;
       const cur = currentToken();
       if (it?.kind === "value" && (cur.indexOf(":") > 0 || engine.schema.operator === "=" && cur.indexOf("=") > 0) && it.text?.trim() !== cur) accept(at);
       else if (it?.whole != null && !cur && !query.trim()) accept(at);
@@ -747,6 +780,7 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
       sugg.head && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "lqb-sg-h", "aria-hidden": "true", children: sugg.head }),
       sugg.items.map((it, i) => row(it, i))
     ] }),
+    !!sugg.more && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "lqb-sg-note lqb-sg-more", children: labels.moreValues(sugg.more) }),
     note && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "lqb-sg-note", children: note }),
     sugg.extra.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { role: "group", "aria-label": sugg.extraHead ?? labels.savedAndRecent, children: [
       /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "lqb-sg-h", "aria-hidden": "true", children: sugg.extraHead ?? labels.savedAndRecent }),

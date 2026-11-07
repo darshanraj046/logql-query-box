@@ -99,6 +99,12 @@ export function HelpDialog({ labels, rootClass, rootStyle, theme, syntax, notes,
               <kbd>Enter</kbd>
             </div>
             <div>
+              <span>Run exactly what you typed</span>
+              <span>
+                <kbd>Ctrl</kbd> <kbd>Enter</kbd>
+              </span>
+            </div>
+            <div>
               <span>New line</span>
               <span>
                 <kbd>Shift</kbd> <kbd>Enter</kbd>

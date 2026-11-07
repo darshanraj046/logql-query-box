@@ -92,7 +92,7 @@ export interface UnknownValue {
 }
 
 export interface SavedQuery {
-  id?: string
+  id?: string | number
   name: string
   query: string
   pinned?: boolean
@@ -118,11 +118,14 @@ export interface SuggestionList {
   extra: Suggestion[]
   extraHead?: string
   note?: string
+  search?: string
+  more?: number
 }
 
 export interface SuggestExtras {
   saved?: SavedQuery[]
   recent?: string[]
+  limit?: number
 }
 
 export type FieldValue = string | { value: string; count?: number }

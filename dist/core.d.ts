@@ -118,7 +118,7 @@ interface UnknownValue {
     regex?: boolean;
 }
 interface SavedQuery {
-    id?: string;
+    id?: string | number;
     name: string;
     query: string;
     pinned?: boolean;
@@ -142,10 +142,13 @@ interface SuggestionList {
     extra: Suggestion[];
     extraHead?: string;
     note?: string;
+    search?: string;
+    more?: number;
 }
 interface SuggestExtras {
     saved?: SavedQuery[];
     recent?: string[];
+    limit?: number;
 }
 type FieldValue = string | {
     value: string;
