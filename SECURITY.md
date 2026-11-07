@@ -11,7 +11,7 @@ Security fixes are released for the latest version only.
 
 ## Verifying a release
 
-Releases from 0.5.4 on are published by the `Publish` GitHub Actions workflow with [npm provenance](https://docs.npmjs.com/generating-provenance-statements). The npm package page shows the source commit and the workflow run that built each version. To check the signatures and provenance of what you installed:
+Releases from 0.5.4 on are staged by the `Publish` GitHub Actions workflow with [npm provenance](https://docs.npmjs.com/generating-provenance-statements), and go live only after a maintainer approves them with 2FA. The npm package page shows the source commit and the workflow run that built each version. To check the signatures and provenance of what you installed:
 
 ```bash
 npm audit signatures

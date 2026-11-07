@@ -1,10 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.5.4
 
 Changed:
 
-- Versions are published by the `Publish` GitHub Actions workflow with npm provenance, through trusted publishing. `npm audit signatures` verifies them, and the npm page links each version to its commit and workflow run. A local `npm publish` now stops with a message.
+- Versions are staged by the `Publish` GitHub Actions workflow with npm provenance, through trusted publishing limited to `npm stage publish`, and go live after a maintainer approves them with 2FA. `npm audit signatures` verifies them, and the npm page links each version to its commit and workflow run. A local `npm publish` now stops with a message.
 
 ## 0.5.3
 

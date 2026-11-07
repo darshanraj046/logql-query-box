@@ -672,9 +672,10 @@ Versions are published to npm only by the `Publish` workflow, so every version c
 
 1. Bump `version` in `package.json`, add the `CHANGELOG.md` entry, run `npm run check` (it rebuilds the committed `dist`), and commit.
 2. Tag the commit `v<version>` and push the branch and the tag.
-3. Create a GitHub release from that tag. The workflow checks the tag matches `package.json`, runs `npm run check` and the Loki tests, then runs `npm publish --provenance`. A release marked as a prerelease is published under the `next` dist-tag.
+3. Create a GitHub release from that tag. The workflow checks the tag matches `package.json`, runs `npm run check` and the Loki tests, then runs `npm stage publish --provenance`. A release marked as a prerelease is staged under the `next` dist-tag.
+4. Approve the staged version with 2FA, on the package page at npmjs.com or with `npm stage list` and `npm stage approve <stage-id>`. Nothing reaches the registry until a maintainer approves it, and npm scans staged versions for malware first. `npm stage reject <stage-id>` discards one.
 
-The workflow authenticates with npm [trusted publishing](https://docs.npmjs.com/trusted-publishers) (GitHub OIDC), so no npm token is stored in the repository.
+The workflow authenticates with npm [trusted publishing](https://docs.npmjs.com/trusted-publishers) (GitHub OIDC), so no npm token is stored in the repository. The trusted publisher is limited to staging, so even a compromised workflow cannot publish without a maintainer's 2FA.
 
 ## License
 
