@@ -341,8 +341,8 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
   }, [shown, items, waiting])
 
   const [draft, setDraft] = useState<{ name: string; pinned: boolean; error: string; busy: boolean } | null>(null)
-  const [removing, setRemoving] = useState<{ key: string | number; error: string; busy: boolean } | null>(null)
-  const [editing, setEditing] = useState<{ key: string | number; name: string; query: string; error: string; busy: boolean } | null>(null)
+  const [removing, setRemoving] = useState<{ key: string; error: string; busy: boolean } | null>(null)
+  const [editing, setEditing] = useState<{ key: string; name: string; query: string; error: string; busy: boolean } | null>(null)
   const saveBtnRef = useRef<HTMLButtonElement>(null)
   const savePopRef = useRef<HTMLDivElement>(null)
   const expanded = bar && (focused || !!draft) && !qOpen && !!query

@@ -476,16 +476,6 @@ describe('0.5.0', () => {
     expect(loadValues).toHaveBeenCalledTimes(2)
     expect(await screen.findByRole('option', { name: /chess-old/ })).toBeInTheDocument()
   })
-
-  it('accepts numeric saved query ids', async () => {
-    const onDeleteSaved = vi.fn()
-    const { user } = setup({ saved: [{ id: 7, name: 'Seven', query: 'level = ERROR' }], onDeleteSaved })
-    await user.click(queriesButton())
-    await user.click(screen.getByRole('button', { name: 'Delete Seven' }))
-    const confirm = screen.getByRole('group', { name: 'Delete “Seven”?' })
-    await user.click(within(confirm).getByRole('button', { name: 'Delete' }))
-    expect(onDeleteSaved).toHaveBeenCalledWith({ id: 7, name: 'Seven', query: 'level = ERROR' })
-  })
 })
 
 describe('0.5.1 errors', () => {

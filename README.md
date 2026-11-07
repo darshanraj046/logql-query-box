@@ -594,8 +594,9 @@ By default the open editor floats over the page instead of pushing it down. To p
 .lqb-bar { position: relative; }
 ```
 
-## Upgrading from 0.5.0
+## Upgrading from 0.5.0 or 0.5.1
 
+- `SavedQuery.id` is a `string` again, as in 0.4. 0.5.0 and 0.5.1 widened it to `string | number`, which broke type checks in apps that pass `saved.id` to functions taking a `string`. If your backend returns numeric ids, map them with `String(id)`.
 - Error messages for bad patterns changed from "One of the /regular expressions/ is not valid." to a specific reason and position. Code that compared the exact text needs updating. `engine.validate()` keeps its short messages.
 - In `=` mode, `level ERROR` is now an error with a fix instead of a text search for both words.
 
@@ -603,7 +604,6 @@ By default the open editor floats over the page instead of pushing it down. To p
 
 - Value suggestions now show at most 100 rows, with a "N more" line under them. Pass `maxSuggestions` to change that. `engine.suggest()` is unchanged unless you pass `limit` in its extras, and then returns `more` with the count left out.
 - `loadValues` receives `search` too. It is `''` unless `searchValues` is on, so existing loaders keep working.
-- `SavedQuery.id` may be a number.
 
 ## Upgrading from 0.3
 

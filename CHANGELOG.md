@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.2
+
+Fixed:
+
+- `SavedQuery.id` is a `string` again. 0.5.0 widened it to `string | number`, which broke type checks in apps that pass `saved.id` to functions taking a `string`. Map numeric ids with `String(id)`.
+
 ## 0.5.1
 
 Added:

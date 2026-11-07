@@ -96,7 +96,7 @@ export interface UnknownValue {
 }
 
 export interface SavedQuery {
-  id?: string | number
+  id?: string
   name: string
   query: string
   pinned?: boolean

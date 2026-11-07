@@ -125,7 +125,7 @@ interface UnknownValue {
     regex?: boolean;
 }
 interface SavedQuery {
-    id?: string | number;
+    id?: string;
     name: string;
     query: string;
     pinned?: boolean;
