@@ -1,6 +1,6 @@
 {
   "name": "logql-query-box",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "A React query box for Grafana Loki: a friendly search language that compiles to LogQL, with suggestions, chips, validation and a headless engine.",
   "license": "MIT",
   "author": "Darshan R",

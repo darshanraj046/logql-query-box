@@ -105,6 +105,10 @@ With a `parser` on the schema, an OR stays in one query whenever LogQL can expre
 
 Half typed input stays valid, so `a OR` or `level:` never shows an error while someone is still typing.
 
+With `operator: '='`, a field name followed by one of its values but no operator, such as `level ERROR` or `level, ERROR`, is an error instead of a silent text search. The box underlines the field and offers `level = ERROR` as a one-click fix. Quote the word, `"level"`, to search the log text for it. The check only fires when the next word is a known value of that field, or the field name ends with a comma, or the field has no known values to compare with, so ordinary text such as `error app crashed` still searches the log text.
+
+Errors point at their position. A bad pattern names the reason and the character, such as `In /time(out/, this ( is never closed (character 5).`, and unclosed quotes and brackets are located too. `analysis.errorAt` holds the range in the query, and the bar underlines it. `analysis.fix`, when present, is a corrected query.
+
 Free text is not case sensitive. Field values are exact, so `app:Billing` and `app:billing` differ, except when the field has known values (through `values`, `loadValues` or the schema): then what was typed is folded to the known spelling. Schema fields with `lowercase: true` are lowered before compiling.
 
 ## Keyboard
@@ -589,6 +593,11 @@ By default the open editor floats over the page instead of pushing it down. To p
 .lqb-bar-slot { height: auto; }
 .lqb-bar { position: relative; }
 ```
+
+## Upgrading from 0.5.0
+
+- Error messages for bad patterns changed from "One of the /regular expressions/ is not valid." to a specific reason and position. Code that compared the exact text needs updating. `engine.validate()` keeps its short messages.
+- In `=` mode, `level ERROR` is now an error with a fix instead of a text search for both words.
 
 ## Upgrading from 0.4
 

@@ -198,8 +198,8 @@ describe('regex validation', () => {
   })
 
   it('does not blame RE2 for an ordinary typo', () => {
-    expect(problem('/[a/')).toBe('One of the /regular expressions/ is not valid.')
-    expect(problem('/(?=a)/')).toBe('One of the /regular expressions/ is not valid for Loki. Loki uses RE2, so lookaround and backreferences do not work.')
+    expect(problem('/[a/')).toBe('In /[a/, this [ is never closed (character 1).')
+    expect(problem('/(?=a)/')).toBe('In /(?=a)/, lookahead does not work in Loki, which uses RE2 (character 1).')
   })
 
   it('reads a slash inside a character class as part of the regex', () => {

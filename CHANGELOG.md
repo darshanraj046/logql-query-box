@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.1
+
+Added:
+
+- Regex errors give the reason and the character, for example `In /time(out/, this ( is never closed (character 5).` Covered: unclosed `(` and `[`, unmatched `)`, repeats with nothing to repeat or after another repeat, lookaround and back-references, reversed ranges, counts above 1000, bad flags, escapes, character and Unicode classes. Which patterns are valid is unchanged, which the RE2 golden verdicts check.
+- In `=` mode, a field name followed by one of its values without an operator, such as `level ERROR` or `level, ERROR`, is an error with a one-click fix to `level = ERROR`.
+- `analysis.errorAt` (the range in the query) and `analysis.fix` (a corrected query). Unclosed quotes and unmatched brackets also set `errorAt`. `ParseResult.errorAt` and `regexError(pattern)` from the core entry.
+- The bar underlines the bad range, shows the message in the open editor's list, and shows the fix as a button under the bar. Label: `useFix`. Class: `.lqb-hl-bad`, `.lqb-sg-err`.
+
+Changed:
+
+- Pattern error messages are specific instead of "One of the /regular expressions/ is not valid." `engine.validate()` is unchanged.
+
 ## 0.5.0
 
 Added:

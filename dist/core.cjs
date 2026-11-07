@@ -33,6 +33,7 @@ __export(core_exports, {
   logqlString: () => logqlString,
   quoteValue: () => quoteValue,
   reEsc: () => reEsc,
+  regexError: () => regexError,
   regexProblem: () => regexProblem,
   resolveSchema: () => resolveSchema,
   toJsRegex: () => toJsRegex,
@@ -74,11 +75,11 @@ var ZERO_WIDTH_ATOM = /^(?:\^|\$|\\[bB])$/;
 var point = (cp) => `\\u{${cp.toString(16)}}`;
 function readEscape(p, i) {
   const d = p[i + 1];
-  if (d === void 0) return { problem: INVALID_REGEX };
-  if (d === "k") return { problem: UNSUPPORTED_REGEX };
+  if (d === void 0) return { problem: INVALID_REGEX, reason: "a \\ at the end has nothing to escape", at: i };
+  if (d === "k") return { problem: UNSUPPORTED_REGEX, reason: "back-references such as \\k<name> do not work in Loki, which uses RE2", at: i };
   if (d >= "1" && d <= "9") {
     const octalFollows = d <= "7" && p[i + 2] >= "0" && p[i + 2] <= "7";
-    if (!octalFollows) return { problem: UNSUPPORTED_REGEX };
+    if (!octalFollows) return { problem: UNSUPPORTED_REGEX, reason: `back-references such as \\${d} do not work in Loki, which uses RE2`, at: i };
   }
   if (d >= "0" && d <= "7") {
     let cp = 0;
@@ -90,16 +91,16 @@ function readEscape(p, i) {
     if (p[i + 2] === "{") {
       const end = p.indexOf("}", i + 3);
       const hex2 = end < 0 ? "" : p.slice(i + 3, end);
-      if (!/^[0-9a-fA-F]+$/.test(hex2) || parseInt(hex2, 16) > 1114111) return { problem: INVALID_REGEX };
+      if (!/^[0-9a-fA-F]+$/.test(hex2) || parseInt(hex2, 16) > 1114111) return { problem: INVALID_REGEX, reason: "\\x{\u2026} needs a hex code point", at: i };
       return { cp: parseInt(hex2, 16), next: end + 1 };
     }
     const hex = p.slice(i + 2, i + 4);
-    if (!/^[0-9a-fA-F]{2}$/.test(hex)) return { problem: INVALID_REGEX };
+    if (!/^[0-9a-fA-F]{2}$/.test(hex)) return { problem: INVALID_REGEX, reason: "\\x needs two hex digits", at: i };
     return { cp: parseInt(hex, 16), next: i + 4 };
   }
   if (Object.prototype.hasOwnProperty.call(SIMPLE_ESCAPE, d)) return { cp: SIMPLE_ESCAPE[d], next: i + 2 };
   if (/[\x00-\x7f]/.test(d) && !/[0-9A-Za-z]/.test(d)) return { cp: d.charCodeAt(0), next: i + 2 };
-  return { problem: INVALID_REGEX };
+  return { problem: INVALID_REGEX, reason: `\\${d} is not a valid escape`, at: i };
 }
 function readUnicodeClass(p, i) {
   let negative = p[i + 1] === "P";
@@ -157,15 +158,15 @@ function readClass(p, start) {
       if (end >= 0) {
         const raw = p.slice(i + 2, end);
         const name = raw.replace(/^\^/, "");
-        if (!Object.prototype.hasOwnProperty.call(POSIX, name)) return { problem: INVALID_REGEX };
+        if (!Object.prototype.hasOwnProperty.call(POSIX, name)) return { problem: INVALID_REGEX, reason: `[:${name}:] is not a known character class`, at: i };
         const ranges = POSIX[name];
         if (raw[0] === "^") {
-          let from = 0;
+          let from2 = 0;
           for (const [lo2, hi] of ranges) {
-            if (lo2 > from) out += `${point(from)}-${point(lo2 - 1)}`;
-            from = hi + 1;
+            if (lo2 > from2) out += `${point(from2)}-${point(lo2 - 1)}`;
+            from2 = hi + 1;
           }
-          out += `${point(from)}-${point(1114111)}`;
+          out += `${point(from2)}-${point(1114111)}`;
         } else {
           for (const [lo2, hi] of ranges) out += `${point(lo2)}-${point(hi)}`;
         }
@@ -180,24 +181,25 @@ function readClass(p, start) {
     }
     if (p[i] === "\\" && (p[i + 1] === "p" || p[i + 1] === "P")) {
       const u = readUnicodeClass(p, i);
-      if (!u) return { problem: INVALID_REGEX };
+      if (!u) return { problem: INVALID_REGEX, reason: "this is not a known Unicode class", at: i };
       out += u.js;
       i = u.next;
       continue;
     }
+    const from = i;
     const lo = single();
     if ("problem" in lo) return lo;
     if (p[i] === "-" && i + 1 < p.length && p[i + 1] !== "]") {
       i++;
       const hi = single();
       if ("problem" in hi) return hi;
-      if (hi.cp < lo.cp) return { problem: INVALID_REGEX };
+      if (hi.cp < lo.cp) return { problem: INVALID_REGEX, reason: `the range ${p.slice(from, i)} runs backwards`, at: from };
       out += `${point(lo.cp)}-${point(hi.cp)}`;
     } else {
       out += point(lo.cp);
     }
   }
-  if (i >= p.length) return { problem: INVALID_REGEX };
+  if (i >= p.length) return { problem: INVALID_REGEX, reason: "this [ is never closed", at: start };
   return { js: `${out}]`, next: i + 1 };
 }
 function sharesCharacters(a, b) {
@@ -283,12 +285,70 @@ function isRisky(source) {
   }
   return false;
 }
+function structure(p) {
+  const open = [];
+  let prev = "start";
+  let i = 0;
+  while (i < p.length) {
+    const c = p[i];
+    if (c === "\\") {
+      const end = p[i + 1] === "Q" ? p.indexOf("\\E", i + 2) : i;
+      i = end < 0 ? p.length : end + 2;
+      prev = "atom";
+      continue;
+    }
+    if (c === "[") {
+      const k = readClass(p, i);
+      i = "next" in k ? k.next : p.length;
+      prev = "atom";
+      continue;
+    }
+    if (c === "(") {
+      open.push(i);
+      const group = /^\((?:\?(?:P?<[A-Za-z0-9_]+>|[imsU]*(?:-[imsU]+)?[:)]))?/.exec(p.slice(i));
+      i += group[0].length;
+      if (group[0].endsWith(")")) {
+        open.pop();
+        continue;
+      }
+      prev = "start";
+      continue;
+    }
+    if (c === ")") {
+      if (!open.length) return ["this ) has no matching (", i];
+      open.pop();
+      prev = "atom";
+      i++;
+      continue;
+    }
+    if (c === "|") {
+      prev = "start";
+      i++;
+      continue;
+    }
+    const count = c === "{" ? /^\{\d+(?:,\d*)?\}/.exec(p.slice(i)) : null;
+    if (c === "*" || c === "+" || c === "?" || count) {
+      const len = count ? count[0].length : 1;
+      if (prev === "start") return [`${count ? count[0] : c} has nothing before it to repeat`, i];
+      if (prev === "repeat" && c === "?") prev = "lazy";
+      else if (prev === "repeat" || prev === "lazy") return [`${count ? count[0] : c} cannot follow another repeat`, i];
+      else prev = "repeat";
+      i += len;
+      continue;
+    }
+    prev = "atom";
+    i++;
+  }
+  if (open.length) return ["this ( is never closed", open[open.length - 1]];
+  return ["it is not valid", 0];
+}
 function translate(p) {
   let out = "";
   let flags = "u";
   let i = 0;
   let caseSensitive = false;
-  const stop = (problem) => ({ source: "", flags: "", problem, caseSensitive, risky: false });
+  const stop = (problem, reason, at) => ({ source: "", flags: "", problem, reason, at, caseSensitive, risky: false });
+  const failed = (f) => stop(f.problem, f.reason, f.at);
   while (i < p.length) {
     const c = p[i];
     if (c === "\\") {
@@ -327,27 +387,27 @@ function translate(p) {
       }
       if (d === "p" || d === "P") {
         const u = readUnicodeClass(p, i);
-        if (!u) return stop(INVALID_REGEX);
+        if (!u) return stop(INVALID_REGEX, "this is not a known Unicode class", i);
         out += u.js;
         i = u.next;
         continue;
       }
       const e = readEscape(p, i);
-      if ("problem" in e) return stop(e.problem);
+      if ("problem" in e) return failed(e);
       out += point(e.cp);
       i = e.next;
       continue;
     }
     if (c === "[") {
       const k = readClass(p, i);
-      if ("problem" in k) return stop(k.problem);
+      if ("problem" in k) return failed(k);
       out += k.js;
       i = k.next;
       continue;
     }
     if (c === "(" && p[i + 1] === "?") {
       const rest = p.slice(i);
-      if (/^\(\?(?:=|!|<=|<!)/.test(rest)) return stop(UNSUPPORTED_REGEX);
+      if (/^\(\?(?:=|!|<=|<!)/.test(rest)) return stop(UNSUPPORTED_REGEX, `${rest[2] === "<" ? "lookbehind" : "lookahead"} does not work in Loki, which uses RE2`, i);
       const named = /^\(\?P?<([A-Za-z0-9_]+)>/.exec(rest);
       if (named) {
         out += "(";
@@ -355,7 +415,7 @@ function translate(p) {
         continue;
       }
       const inline = /^\(\?([imsU]*)(-[imsU]+)?([:)])/.exec(rest);
-      if (!inline) return stop(INVALID_REGEX);
+      if (!inline) return stop(INVALID_REGEX, "(? must start a group such as (?: or flags such as (?i)", i);
       i += inline[0].length;
       if (inline[3] === ":") {
         out += "(?:";
@@ -384,7 +444,8 @@ function translate(p) {
       }
       const min = Number(m[1]);
       const max = m[2] ? m[3] === "" ? -1 : Number(m[3]) : min;
-      if (min > 1e3 || max > 1e3 || max >= 0 && min > max) return stop(INVALID_REGEX);
+      if (min > 1e3 || max > 1e3) return stop(INVALID_REGEX, "repeat counts go up to 1000", i);
+      if (max >= 0 && min > max) return stop(INVALID_REGEX, `the first count in ${m[0]} is larger than the second`, i);
       out += m[0];
       i += m[0].length;
       continue;
@@ -400,7 +461,8 @@ function translate(p) {
   try {
     new RegExp(out, flags);
   } catch {
-    return stop(INVALID_REGEX);
+    const [reason, at] = structure(p);
+    return stop(INVALID_REGEX, reason, at);
   }
   return { source: out, flags, problem: null, caseSensitive, risky: isRisky(out) };
 }
@@ -416,6 +478,11 @@ function translated(p) {
 }
 function regexProblem(p) {
   return translated(p).problem;
+}
+function regexError(p) {
+  const t = translated(p);
+  if (!t.problem) return null;
+  return { reason: t.reason ?? "it is not valid", at: t.at ?? 0, unsupported: t.problem === UNSUPPORTED_REGEX };
 }
 function isRiskyRegex(p) {
   return translated(p).risky;
@@ -906,7 +973,7 @@ function tokenize(src, schema) {
       while (i < n) {
         if (src[i] === '"') {
           const p = readPhrase(src, i);
-          if (!p) return { toks, open: s, error: `The quote that starts at character ${i + 1} is never closed.` };
+          if (!p) return { toks, open: s, error: `The quote that starts at character ${i + 1} is never closed.`, errorAt: [i, n] };
           parts.push({ v: p.value, wild: false });
           quotes2.push([i, p.end]);
           i = p.end;
@@ -939,7 +1006,7 @@ function tokenize(src, schema) {
     let quotes = [];
     if (src[i] === '"') {
       const p = readPhrase(src, i);
-      if (!p) return { toks, open: s, error: `The quote that starts at character ${i + 1} is never closed.` };
+      if (!p) return { toks, open: s, error: `The quote that starts at character ${i + 1} is never closed.`, errorAt: [i, n] };
       quotes = [[i, p.end]];
       value = p.value;
       i = p.end;
@@ -1059,7 +1126,7 @@ function spanOf(nodes) {
 }
 function parse(src, schema, known) {
   const tk = tokenize(src, schema);
-  if (tk.error) return { error: tk.error, children: [] };
+  if (tk.error) return { error: tk.error, errorAt: tk.errorAt, children: [] };
   const toks = tk.toks.filter((t) => t.t !== "skip");
   let p = 0;
   let uid = 0;
@@ -1130,11 +1197,11 @@ function parse(src, schema, known) {
   const parseUnary = () => {
     const t = toks[p];
     if (t.t === "(") {
-      if (++depth > MAX_DEPTH) throw new Error(`This filter nests brackets too deeply. The limit is ${MAX_DEPTH}.`);
+      if (++depth > MAX_DEPTH) throw Object.assign(new Error(`This filter nests brackets too deeply. The limit is ${MAX_DEPTH}.`), { at: [t.s, t.e] });
       p++;
       const e = parseOr();
       const c = toks[p];
-      if (!c || c.t !== ")") throw new Error("A ( is missing its closing ).");
+      if (!c || c.t !== ")") throw Object.assign(new Error("A ( is missing its closing )."), { at: [t.s, t.e] });
       p++;
       depth--;
       if (e) {
@@ -1150,11 +1217,11 @@ function parse(src, schema, known) {
   };
   try {
     const top = parseOr();
-    if (p < toks.length) throw new Error("There is a ) without a matching (.");
+    if (p < toks.length) throw Object.assign(new Error("There is a ) without a matching (."), { at: [toks[p].s, toks[p].e] });
     const kids = !top ? [] : top.type === "group" && top.op === "AND" ? top.children : [top];
     return { root: G("AND", kids), children: kids };
   } catch (e) {
-    return { error: e.message, children: [] };
+    return { error: e.message, errorAt: e.at, children: [] };
   }
 }
 
@@ -1583,35 +1650,61 @@ function createEngine(options = {}) {
     isNegative,
     analyze(query) {
       const parsed = parseQuery(query);
-      if (parsed.error) return { query, parsed, error: parsed.error, tree: null, logql: NO_LOGQL, filter: null, riskyRegex: false, unknownValues: [] };
-      const found = problems(parsed.root);
-      if (found.length) {
-        const error2 = found.some((p) => p.startsWith("Loki")) ? "One of the /regular expressions/ is not valid for Loki. Loki uses RE2, so lookaround and backreferences do not work." : "One of the /regular expressions/ is not valid.";
-        return { query, parsed, error: error2, tree: null, logql: NO_LOGQL, filter: null, riskyRegex: false, unknownValues: [] };
+      const blocked = (error2, errorAt, fix) => ({ query, parsed, error: error2, errorAt, fix, tree: null, logql: NO_LOGQL, filter: null, riskyRegex: false, unknownValues: [] });
+      if (parsed.error) return blocked(parsed.error, parsed.errorAt);
+      const firstBad = (n2) => n2.type === "cond" ? condProblem(n2) ? n2 : null : n2.children.reduce((hit, c) => hit ?? firstBad(c), null);
+      const n = problems(parsed.root).length ? firstBad(parsed.root) : null;
+      if (n) {
+        const pattern = valOf(n);
+        const bad = regexError(pattern);
+        const [s, e] = n.spans[0];
+        const raw = pattern.replace(/\//g, "\\/");
+        const from = query.lastIndexOf(raw, e - raw.length);
+        const shift = pattern.slice(0, bad.at).split("/").length - 1;
+        const at = from >= s ? from + bad.at + shift : s;
+        const width = Math.max(1, Math.min(pattern.length - bad.at, /^\\./.test(pattern.slice(bad.at)) ? 2 : 1));
+        return blocked(`In /${raw}/, ${bad.reason} (character ${bad.at + shift + 1}).`, [at, Math.min(at + width, from >= s ? from + raw.length : e)]);
+      }
+      if (schema.operator === "=") {
+        const toks = tokenize(query, schema).toks.filter((t) => t.t !== "skip");
+        for (let k = 0; k < toks.length - 1; k++) {
+          const t = toks[k];
+          const next = toks[k + 1];
+          if (t.t !== "term" || t.field || t.neg || t.kind !== "word" || next.t !== "term" || next.field || next.neg) continue;
+          const name = t.value.replace(/,+$/, "");
+          const field = schema.alias.get(name.toLowerCase());
+          if (!field || field === schema.lineField) continue;
+          const f = schema.fields.get(field);
+          const word = String(next.value ?? next.parts?.[0]?.v ?? "").replace(/,+$/, "").toLowerCase();
+          const names = [...f?.values ?? [], ...known.get(field)?.keys() ?? [], ...f?.synonyms.keys() ?? [], ...f?.groups.keys() ?? []].map((v) => v.toLowerCase());
+          if (!t.value.endsWith(",") && names.length && !names.includes(word)) continue;
+          const fix = `${query.slice(0, t.s)}${name} = ${query.slice(next.s)}`;
+          return blocked(`\u201C${name}\u201D is a field, so it needs an operator, like ${name} = ${query.slice(next.s, next.e).replace(/,+$/, "")}. Without one this searches the log text for the word. To search for the word itself, write "${name}".`, [t.s, t.s + name.length], fix);
+        }
       }
       const tree = activeExpanded(parsed.root);
       const logql = compileTree(tree);
       const error = logql.tooMany ? `This filter expands into ${logql.count} OR branches. Use comma lists such as level:error,warn to stay under ${maxBranches}.` : null;
       const unknownValues = [];
-      for (const n of parsed.children) {
-        if (n.type !== "cond") continue;
-        const f = schema.fields.get(n.field);
-        const names = [.../* @__PURE__ */ new Set([...f?.values ?? [], ...known.get(n.field)?.keys() ?? []])];
-        if (!f || !names.length || n.field === schema.lineField) continue;
-        if (!n.parts) {
-          const v = valOf(n);
-          if (n.op !== "regex" && n.op !== "not_regex" || isRiskyRegex(v)) continue;
-          const re = toJsRegex(v, false, !n.anywhere);
+      for (const n2 of parsed.children) {
+        if (n2.type !== "cond") continue;
+        const f = schema.fields.get(n2.field);
+        const names = [.../* @__PURE__ */ new Set([...f?.values ?? [], ...known.get(n2.field)?.keys() ?? []])];
+        if (!f || !names.length || n2.field === schema.lineField) continue;
+        if (!n2.parts) {
+          const v = valOf(n2);
+          if (n2.op !== "regex" && n2.op !== "not_regex" || isRiskyRegex(v)) continue;
+          const re = toJsRegex(v, false, !n2.anywhere);
           if (names.some((name) => re.test(name))) continue;
           const lit = v.replace(/^\^/, "").replace(/\$$/, "").toLowerCase();
           const matches = /^[\w.-]+$/.test(lit) ? names.filter((name) => name.toLowerCase().includes(lit)).slice(0, 3) : [];
-          unknownValues.push({ field: n.field, value: v, negative: isNegative(n), matches, regex: true });
+          unknownValues.push({ field: n2.field, value: v, negative: isNegative(n2), matches, regex: true });
           continue;
         }
-        for (const p of n.parts) {
+        for (const p of n2.parts) {
           const low = p.v.toLowerCase();
           if (p.wild || !low || f.groups.has(low) || names.some((v) => v.toLowerCase() === low)) continue;
-          unknownValues.push({ field: n.field, value: p.v, negative: isNegative(n), matches: names.filter((v) => v.toLowerCase().includes(low)).slice(0, 3) });
+          unknownValues.push({ field: n2.field, value: p.v, negative: isNegative(n2), matches: names.filter((v) => v.toLowerCase().includes(low)).slice(0, 3) });
         }
       }
       return { query, parsed, error, tree, logql, filter: tree ? toFilter(tree) : null, riskyRegex: !!tree && hasRiskyRegex(tree), unknownValues };
@@ -1680,6 +1773,7 @@ function createEngine(options = {}) {
   logqlString,
   quoteValue,
   reEsc,
+  regexError,
   regexProblem,
   resolveSchema,
   toJsRegex,

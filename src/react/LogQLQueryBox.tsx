@@ -241,7 +241,7 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
   const valueField = sugg?.field
   const search = searchValues && valueField ? (sugg?.search ?? '') : ''
   const waiting = !!valueField && loading.includes(valueField)
-  const note = sugg?.note
+  const note = sugg?.note ?? (bar && analysis.error ? analysis.error : undefined)
   const shown = open || waiting || !!note
 
   const usable = (text: string) => [...text.matchAll(/(?:^|[\s(`-])([A-Za-z_][A-Za-z0-9_]*):/g)].every((m) => engine.schema.alias.has(m[1].toLowerCase()))
@@ -676,7 +676,7 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
         </div>
       )}
       {!!sugg.more && <div className="lqb-sg-note lqb-sg-more">{labels.moreValues(sugg.more)}</div>}
-      {note && <div className="lqb-sg-note">{note}</div>}
+      {note && <div className={sugg.note ? 'lqb-sg-note' : 'lqb-sg-note lqb-sg-err'}>{note}</div>}
       {sugg.extra.length > 0 && (
         <div role="group" aria-label={sugg.extraHead ?? labels.savedAndRecent}>
           <div className="lqb-sg-h" aria-hidden="true">
@@ -724,7 +724,12 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
 
   const errorBox = analysis.error && (
     <div className="lqb-error" id={errorId} role="alert">
-      {analysis.error}
+      <span>{analysis.error}</span>
+      {analysis.fix != null && interactive && (
+        <button type="button" className="lqb-fix" aria-label={labels.useFix(analysis.fix)} onClick={() => commit(analysis.fix as string)}>
+          {analysis.fix}
+        </button>
+      )}
     </div>
   )
 
@@ -810,9 +815,19 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
       out.push(text.slice(last))
       return out
     }
-    const hl = [...paint(query, 'q'), '\u200b']
+    const bad = analysis.errorAt
+    const hl = bad
+      ? [
+          ...paint(query.slice(0, bad[0]), 'q'),
+          <span key="bad" className="lqb-hl-bad">
+            {paint(query.slice(bad[0], bad[1]), 'b')}
+          </span>,
+          ...paint(query.slice(bad[1]), 'r'),
+          '\u200b'
+        ]
+      : [...paint(query, 'q'), '\u200b']
     const flat = (text: string) => text.replace(/\s+/g, ' ').trim()
-    const pieces = analysis.parsed.children.length ? analysis.parsed.children.map((n) => flat((n.spans as Span[]).map(([a, b]) => query.slice(a, b)).join(' '))) : [flat(query)]
+    const pieces = !bad && analysis.parsed.children.length ? analysis.parsed.children.map((n) => flat((n.spans as Span[]).map(([a, b]) => query.slice(a, b)).join(' '))) : [flat(query)]
     const autoName = analysis.parsed.children
       .map((n) => (n.type === 'cond' ? (n.parts ? n.parts.map((p) => p.v).join(', ') : String(n.value)) : engine.chipText(n)))
       .filter(Boolean)
@@ -979,7 +994,7 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
                       {pieces.map((p, i) => (
                         <span key={i} className="lqb-piece">
                           {i > 0 && <span className="lqb-sep">, </span>}
-                          {paint(p, `p${i}`)}
+                          {bad ? hl : paint(p, `p${i}`)}
                         </span>
                       ))}
                     </div>
@@ -990,7 +1005,7 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
                   )}
                   {textarea}
                 </div>
-                {summarize && fit.hidden > 0 && <span className="lqb-more">{labels.hiddenFilters(fit.hidden)}</span>}
+                {summarize && fit.hidden > 0 && !bad && <span className="lqb-more">{labels.hiddenFilters(fit.hidden)}</span>}
                 {query && interactive && (
                   <span className="lqb-field-acts">
                     <button

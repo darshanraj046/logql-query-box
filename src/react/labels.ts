@@ -29,6 +29,7 @@ export interface Labels {
   suggestionCount: (count: number) => string
   loadingValues: string
   moreValues: (count: number) => string
+  useFix: (query: string) => string
   savedAndRecent: string
   filterPlaceholder: string
   queries: string
@@ -98,6 +99,7 @@ export const defaultLabels: Labels = {
   moreFilters: (count) => `+${count} more`,
   suggestionCount: (count) => `${count} ${count === 1 ? 'suggestion' : 'suggestions'} available`,
   loadingValues: 'Loading values…',
+  useFix: (query) => `Change the filter to ${query} and run it`,
   moreValues: (count) => `${count.toLocaleString('en-US')} more. Keep typing to narrow the list.`,
   savedAndRecent: 'Saved and recent',
   filterPlaceholder: 'Type to filter',

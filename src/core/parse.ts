@@ -76,7 +76,7 @@ function spanOf(nodes: QueryNode[]): Span {
 
 export function parse(src: string, schema: ResolvedSchema, known: Map<string, Map<string, number | undefined>>): ParseResult {
   const tk = tokenize(src, schema)
-  if (tk.error) return { error: tk.error, children: [] }
+  if (tk.error) return { error: tk.error, errorAt: tk.errorAt, children: [] }
   const toks = tk.toks.filter((t) => t.t !== 'skip')
   let p = 0
   let uid = 0
@@ -152,11 +152,11 @@ export function parse(src: string, schema: ResolvedSchema, known: Map<string, Ma
   const parseUnary = (): QueryNode | null => {
     const t = toks[p]
     if (t.t === '(') {
-      if (++depth > MAX_DEPTH) throw new Error(`This filter nests brackets too deeply. The limit is ${MAX_DEPTH}.`)
+      if (++depth > MAX_DEPTH) throw Object.assign(new Error(`This filter nests brackets too deeply. The limit is ${MAX_DEPTH}.`), { at: [t.s, t.e] })
       p++
       const e = parseOr()
       const c = toks[p]
-      if (!c || c.t !== ')') throw new Error('A ( is missing its closing ).')
+      if (!c || c.t !== ')') throw Object.assign(new Error('A ( is missing its closing ).'), { at: [t.s, t.e] })
       p++
       depth--
       if (e) {
@@ -173,10 +173,10 @@ export function parse(src: string, schema: ResolvedSchema, known: Map<string, Ma
 
   try {
     const top = parseOr()
-    if (p < toks.length) throw new Error('There is a ) without a matching (.')
+    if (p < toks.length) throw Object.assign(new Error('There is a ) without a matching (.'), { at: [toks[p].s, toks[p].e] })
     const kids = !top ? [] : top.type === 'group' && top.op === 'AND' ? top.children : [top]
     return { root: G('AND', kids), children: kids }
   } catch (e) {
-    return { error: (e as Error).message, children: [] }
+    return { error: (e as Error).message, errorAt: (e as { at?: Span }).at, children: [] }
   }
 }

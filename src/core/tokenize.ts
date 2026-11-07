@@ -100,7 +100,7 @@ export function tokenize(src: string, schema: ResolvedSchema): TokenizeResult {
       while (i < n) {
         if (src[i] === '"') {
           const p = readPhrase(src, i)
-          if (!p) return { toks, open: s, error: `The quote that starts at character ${i + 1} is never closed.` }
+          if (!p) return { toks, open: s, error: `The quote that starts at character ${i + 1} is never closed.`, errorAt: [i, n] }
           parts.push({ v: p.value, wild: false })
           quotes.push([i, p.end])
           i = p.end
@@ -134,7 +134,7 @@ export function tokenize(src: string, schema: ResolvedSchema): TokenizeResult {
     let quotes: Span[] = []
     if (src[i] === '"') {
       const p = readPhrase(src, i)
-      if (!p) return { toks, open: s, error: `The quote that starts at character ${i + 1} is never closed.` }
+      if (!p) return { toks, open: s, error: `The quote that starts at character ${i + 1} is never closed.`, errorAt: [i, n] }
       quotes = [[i, p.end]]
       value = p.value
       i = p.end

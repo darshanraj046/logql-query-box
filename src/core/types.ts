@@ -42,6 +42,7 @@ export interface ParseResult {
   root?: Group
   children: QueryNode[]
   error?: string
+  errorAt?: Span
 }
 
 export interface Token {
@@ -59,6 +60,7 @@ export interface Token {
 export interface TokenizeResult {
   toks: Token[]
   error?: string
+  errorAt?: Span
   open?: number
 }
 
@@ -76,6 +78,8 @@ export interface Analysis {
   query: string
   parsed: ParseResult
   error: string | null
+  errorAt?: Span
+  fix?: string
   tree: QueryNode | null
   logql: CompileResult
   filter: ApiFilter | null

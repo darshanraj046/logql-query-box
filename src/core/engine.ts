@@ -2,10 +2,11 @@ import { chipText } from './chips'
 import { compile, MAX_BRANCHES } from './compile'
 import { activeValues, appendTerm, clearField, editSpans, facetEdit, termText } from './edit'
 import { parse } from './parse'
-import { isRiskyRegex, reEsc, toJsRegex } from './regex'
+import { isRiskyRegex, reEsc, regexError, toJsRegex } from './regex'
 import { defaultSchema, resolveSchema, type ResolvedSchema, type Schema } from './schema'
 import { suggest, tokenAtCaret, type KnownValues } from './suggest'
-import { activeTree, evaluate, expandGroups, hasRiskyRegex, isNegative, problems, toFilter, valOf } from './tree'
+import { tokenize } from './tokenize'
+import { activeTree, condProblem, evaluate, expandGroups, hasRiskyRegex, isNegative, problems, toFilter, valOf } from './tree'
 import type { Analysis, CompileResult, Cond, FieldValues, LogRecord, ParseResult, QueryNode, Span, SuggestExtras, SuggestionList, UnknownValue, ValuePart } from './types'
 
 export interface EngineOptions {
@@ -80,13 +81,37 @@ export function createEngine(options: EngineOptions = {}): Engine {
     isNegative,
     analyze(query) {
       const parsed = parseQuery(query)
-      if (parsed.error) return { query, parsed, error: parsed.error, tree: null, logql: NO_LOGQL, filter: null, riskyRegex: false, unknownValues: [] }
-      const found = problems(parsed.root as QueryNode)
-      if (found.length) {
-        const error = found.some((p) => p.startsWith('Loki'))
-          ? 'One of the /regular expressions/ is not valid for Loki. Loki uses RE2, so lookaround and backreferences do not work.'
-          : 'One of the /regular expressions/ is not valid.'
-        return { query, parsed, error, tree: null, logql: NO_LOGQL, filter: null, riskyRegex: false, unknownValues: [] }
+      const blocked = (error: string, errorAt?: Span, fix?: string): Analysis => ({ query, parsed, error, errorAt, fix, tree: null, logql: NO_LOGQL, filter: null, riskyRegex: false, unknownValues: [] })
+      if (parsed.error) return blocked(parsed.error, parsed.errorAt)
+      const firstBad = (n: QueryNode): Cond | null => (n.type === 'cond' ? (condProblem(n) ? n : null) : n.children.reduce<Cond | null>((hit, c) => hit ?? firstBad(c), null))
+      const n = problems(parsed.root as QueryNode).length ? firstBad(parsed.root as QueryNode) : null
+      if (n) {
+        const pattern = valOf(n)
+        const bad = regexError(pattern) as NonNullable<ReturnType<typeof regexError>>
+        const [s, e] = (n.spans as Span[])[0]
+        const raw = pattern.replace(/\//g, '\\/')
+        const from = query.lastIndexOf(raw, e - raw.length)
+        const shift = pattern.slice(0, bad.at).split('/').length - 1
+        const at = from >= s ? from + bad.at + shift : s
+        const width = Math.max(1, Math.min(pattern.length - bad.at, /^\\./.test(pattern.slice(bad.at)) ? 2 : 1))
+        return blocked(`In /${raw}/, ${bad.reason} (character ${bad.at + shift + 1}).`, [at, Math.min(at + width, from >= s ? from + raw.length : e)])
+      }
+      if (schema.operator === '=') {
+        const toks = tokenize(query, schema).toks.filter((t) => t.t !== 'skip')
+        for (let k = 0; k < toks.length - 1; k++) {
+          const t = toks[k]
+          const next = toks[k + 1]
+          if (t.t !== 'term' || t.field || t.neg || t.kind !== 'word' || next.t !== 'term' || next.field || next.neg) continue
+          const name = (t.value as string).replace(/,+$/, '')
+          const field = schema.alias.get(name.toLowerCase())
+          if (!field || field === schema.lineField) continue
+          const f = schema.fields.get(field)
+          const word = String(next.value ?? next.parts?.[0]?.v ?? '').replace(/,+$/, '').toLowerCase()
+          const names = [...(f?.values ?? []), ...(known.get(field)?.keys() ?? []), ...(f?.synonyms.keys() ?? []), ...(f?.groups.keys() ?? [])].map((v) => v.toLowerCase())
+          if (!(t.value as string).endsWith(',') && names.length && !names.includes(word)) continue
+          const fix = `${query.slice(0, t.s)}${name} = ${query.slice(next.s)}`
+          return blocked(`“${name}” is a field, so it needs an operator, like ${name} = ${query.slice(next.s, next.e).replace(/,+$/, '')}. Without one this searches the log text for the word. To search for the word itself, write "${name}".`, [t.s, t.s + name.length], fix)
+        }
       }
       const tree = activeExpanded(parsed.root as QueryNode)
       const logql = compileTree(tree)

@@ -487,3 +487,28 @@ describe('0.5.0', () => {
     expect(onDeleteSaved).toHaveBeenCalledWith({ id: 7, name: 'Seven', query: 'level = ERROR' })
   })
 })
+
+describe('0.5.1 errors', () => {
+  it('underlines a field used without an operator and fixes it in one click', async () => {
+    const { user, onExecute } = setup()
+    await user.click(box())
+    await user.keyboard('level, ERROR')
+    expect(screen.getByRole('alert')).toHaveTextContent('“level” is a field, so it needs an operator, like level = ERROR.')
+    expect(document.querySelector('.lqb-hl-bad')).toHaveTextContent('level')
+    expect(document.querySelector('.lqb-sg-err')).toHaveTextContent('“level” is a field, so it needs an operator')
+    expect(screen.getByRole('button', { name: 'Run query' })).toBeDisabled()
+    await user.click(screen.getByRole('button', { name: 'Change the filter to level = ERROR and run it' }))
+    expect(box()).toHaveValue('level = ERROR')
+    expect(onExecute).toHaveBeenLastCalledWith(expect.objectContaining({ query: 'level = ERROR' }))
+    expect(document.querySelector('.lqb-hl-bad')).toBeNull()
+  })
+
+  it('underlines the bad character of a regex', async () => {
+    const { user } = setup()
+    await user.click(box())
+    await user.keyboard('content =~ time(out')
+    expect(screen.getByRole('alert')).toHaveTextContent('In /time(out/, this ( is never closed (character 5).')
+    expect(document.querySelector('.lqb-hl-bad')?.textContent).toBe('(')
+    expect(screen.queryByRole('button', { name: /Change the filter/ })).toBeNull()
+  })
+})

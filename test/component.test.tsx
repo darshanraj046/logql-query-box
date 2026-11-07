@@ -92,7 +92,7 @@ describe('typing', () => {
   it('flags regexes Loki cannot run', async () => {
     const { user } = setup()
     fireEvent.change(box(), { target: { value: '/(?=a)/' } })
-    expect(screen.getByRole('alert')).toHaveTextContent('Loki uses RE2')
+    expect(screen.getByRole('alert')).toHaveTextContent('In /(?=a)/, lookahead does not work in Loki, which uses RE2 (character 1).')
     await user.click(execute()).catch(() => undefined)
     expect(execute()).toBeDisabled()
   })

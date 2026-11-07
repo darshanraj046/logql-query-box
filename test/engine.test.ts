@@ -94,7 +94,7 @@ describe('errors', () => {
   })
 
   it('finds a bad regex nested inside a group', () => {
-    expect(engine.analyze('a (b OR /(?=x)/)').error).toContain('Loki uses RE2')
+    expect(engine.analyze('a (b OR /(?=x)/)').error).toBe('In /(?=x)/, lookahead does not work in Loki, which uses RE2 (character 1).')
   })
 })
 
@@ -762,5 +762,99 @@ describe('maxBranches option', () => {
 describe('determinism', () => {
   it('gives identical trees on repeated parses', () => {
     expect(engine.parse('a (b OR c)')).toEqual(engine.parse('a (b OR c)'))
+  })
+})
+
+describe('error positions', () => {
+  const at = (q: string) => {
+    const a = engine.analyze(q)
+    return { error: a.error, bad: a.errorAt ? q.slice(...a.errorAt) : null, start: a.errorAt?.[0] }
+  }
+
+  it.each([
+    ['/a(b/', 'this ( is never closed (character 2)', '(', 2],
+    ['/a)b/', 'this ) has no matching ( (character 2)', ')', 2],
+    ['/a**/', '* cannot follow another repeat (character 3)', '*', 3],
+    ['/*a/', '* has nothing before it to repeat (character 1)', '*', 1],
+    ['/a|+b/', '+ has nothing before it to repeat (character 3)', '+', 3],
+    ['/a*??/', '? cannot follow another repeat (character 4)', '?', 4],
+    ['/(?=a)b/', 'lookahead does not work in Loki, which uses RE2 (character 1)', '(', 1],
+    ['/(?<!a)b/', 'lookbehind does not work in Loki, which uses RE2 (character 1)', '(', 1],
+    ['/(a)\\1/', 'back-references such as \\1 do not work in Loki, which uses RE2 (character 4)', '\\1', 4],
+    ['/[z-a]/', 'the range z-a runs backwards (character 2)', 'z', 2],
+    ['/x[abc/', 'this [ is never closed (character 2)', '[', 2],
+    ['/a{1001}/', 'repeat counts go up to 1000 (character 2)', '{', 2],
+    ['/a{5,2}/', 'the first count in {5,2} is larger than the second (character 2)', '{', 2],
+    ['/(?z)a/', '(? must start a group such as (?: or flags such as (?i) (character 1)', '(', 1],
+    ['/\\q/', '\\q is not a valid escape (character 1)', '\\q', 1],
+    ['/[[:foo:]]/', '[:foo:] is not a known character class (character 2)', '[', 2],
+    ['/\\p{Nope}/', 'this is not a known Unicode class (character 1)', '\\p', 1]
+  ])('%s', (q, reason, bad, char) => {
+    const r = at(`timeout ${q}`)
+    expect(r.error).toBe(`In ${q}, ${reason}.`)
+    expect(r.bad).toBe(bad)
+    expect(r.start).toBe(8 + char)
+  })
+
+  it('counts an escaped slash as typed', () => {
+    const r = at('/a\\/(b/')
+    expect(r.error).toBe('In /a\\/(b/, this ( is never closed (character 4).')
+    expect(r.bad).toBe('(')
+  })
+
+  it('points at the first bad pattern inside groups', () => {
+    expect(at('a (b OR /x)/) /(y/').bad).toBe(')')
+  })
+
+  it('points at brackets and quotes', () => {
+    expect(at('(a OR b')).toMatchObject({ error: 'A ( is missing its closing ).', bad: '(', start: 0 })
+    expect(at('a) b')).toMatchObject({ error: 'There is a ) without a matching (.', bad: ')', start: 1 })
+    expect(at('a "unclosed')).toMatchObject({ bad: '"unclosed', start: 2 })
+  })
+
+  it('leaves valid patterns, including lazy repeats, alone', () => {
+    for (const q of ['/a*?/', '/\\Q(\\E/', '/(?i)a+/', '/(?P<x>a)/', '/[a-z]{2,5}/']) expect(engine.analyze(q).error).toBeNull()
+  })
+})
+
+describe('field names without an operator in = mode', () => {
+  const eq = createEngine({
+    baseSelector: { index: 'a' },
+    values: { serviceName: ['pii-detector'] },
+    schema: {
+      parser: 'json',
+      operator: '=',
+      fields: {
+        logLevel: { label: 'level', aliases: ['level'], values: ['ERROR', 'WARN'], synonyms: { err: 'ERROR' } },
+        serviceName: { label: 'app', aliases: ['app'] },
+        serviceType: { label: 'app.type', aliases: ['app.type'] },
+        content: { label: 'content', kind: 'line', parsed: true, aliases: ['content'] }
+      }
+    }
+  })
+
+  it.each([
+    ['level ERROR', 'level = ERROR'],
+    ['level, ERROR', 'level = ERROR'],
+    ['level error', 'level = error'],
+    ['level err', 'level = err'],
+    ['timeout level, ERROR, WARN', 'timeout level = ERROR, WARN'],
+    ['app pii-detector', 'app = pii-detector'],
+    ['app.type JAVA', 'app.type = JAVA']
+  ])('flags %s', (q, fix) => {
+    const a = eq.analyze(q)
+    const name = fix.split(' = ')[0].split(' ').pop() as string
+    expect(a.error).toContain(`“${name}” is a field, so it needs an operator`)
+    expect(a.fix).toBe(fix)
+    expect(q.slice(...(a.errorAt as [number, number]))).toBe(name)
+    expect(eq.analyze(fix).error).toBeNull()
+  })
+
+  it.each(['error app crashed', 'level timeout', '"level" ERROR', 'level', 'level = ERROR', 'level OR ERROR', '-level ERROR', 'level (ERROR)', 'content ERROR'])('leaves %s alone', (q) => {
+    expect(eq.analyze(q).error).toBeNull()
+  })
+
+  it('does not change : mode', () => {
+    expect(engine.analyze('level error').error).toBeNull()
   })
 })

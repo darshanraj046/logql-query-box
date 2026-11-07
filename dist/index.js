@@ -154,6 +154,7 @@ var defaultLabels = {
   moreFilters: (count) => `+${count} more`,
   suggestionCount: (count) => `${count} ${count === 1 ? "suggestion" : "suggestions"} available`,
   loadingValues: "Loading values\u2026",
+  useFix: (query) => `Change the filter to ${query} and run it`,
   moreValues: (count) => `${count.toLocaleString("en-US")} more. Keep typing to narrow the list.`,
   savedAndRecent: "Saved and recent",
   filterPlaceholder: "Type to filter",
@@ -364,7 +365,7 @@ var LogQLQueryBox = forwardRef(function LogQLQueryBox2(props, ref) {
   const valueField = sugg?.field;
   const search = searchValues && valueField ? sugg?.search ?? "" : "";
   const waiting = !!valueField && loading.includes(valueField);
-  const note = sugg?.note;
+  const note = sugg?.note ?? (bar && analysis.error ? analysis.error : void 0);
   const shown = open || waiting || !!note;
   const usable = (text) => [...text.matchAll(/(?:^|[\s(`-])([A-Za-z_][A-Za-z0-9_]*):/g)].every((m) => engine.schema.alias.has(m[1].toLowerCase()));
   const shownExamples = examples ?? defaultExamples.filter(usable);
@@ -760,7 +761,7 @@ var LogQLQueryBox = forwardRef(function LogQLQueryBox2(props, ref) {
       sugg.items.map((it, i) => row(it, i))
     ] }),
     !!sugg.more && /* @__PURE__ */ jsx2("div", { className: "lqb-sg-note lqb-sg-more", children: labels.moreValues(sugg.more) }),
-    note && /* @__PURE__ */ jsx2("div", { className: "lqb-sg-note", children: note }),
+    note && /* @__PURE__ */ jsx2("div", { className: sugg.note ? "lqb-sg-note" : "lqb-sg-note lqb-sg-err", children: note }),
     sugg.extra.length > 0 && /* @__PURE__ */ jsxs2("div", { role: "group", "aria-label": sugg.extraHead ?? labels.savedAndRecent, children: [
       /* @__PURE__ */ jsx2("div", { className: "lqb-sg-h", "aria-hidden": "true", children: sugg.extraHead ?? labels.savedAndRecent }),
       sugg.extra.map((it, i) => row(it, i + sugg.items.length))
@@ -776,7 +777,10 @@ var LogQLQueryBox = forwardRef(function LogQLQueryBox2(props, ref) {
     unknown.regex && /^\^[\w.-]+\$?$/.test(unknown.value) && unknown.matches.length > 0 && /* @__PURE__ */ jsx2("button", { type: "button", className: "lqb-fix", onClick: () => commit(engine.replaceValue(query, unknown.field, unknown.value, `${unknown.value.replace(/^\^/, "").replace(/\$$/, "")}*`, unknown.negative)), children: labels.startingWith(unknownLabel, unknown.value.replace(/^\^/, "").replace(/\$$/, ""), unknown.negative) }),
     unknown.matches.length > 1 && /* @__PURE__ */ jsx2("button", { type: "button", className: "lqb-fix", onClick: () => commit(engine.replaceValue(query, unknown.field, unknown.value, `*${unknown.value.replace(/^\^/, "").replace(/\$$/, "")}*`, unknown.negative)), children: labels.containing(unknownLabel, unknown.value.replace(/^\^/, "").replace(/\$$/, ""), unknown.negative) })
   ] });
-  const errorBox = analysis.error && /* @__PURE__ */ jsx2("div", { className: "lqb-error", id: errorId, role: "alert", children: analysis.error });
+  const errorBox = analysis.error && /* @__PURE__ */ jsxs2("div", { className: "lqb-error", id: errorId, role: "alert", children: [
+    /* @__PURE__ */ jsx2("span", { children: analysis.error }),
+    analysis.fix != null && interactive && /* @__PURE__ */ jsx2("button", { type: "button", className: "lqb-fix", "aria-label": labels.useFix(analysis.fix), onClick: () => commit(analysis.fix), children: analysis.fix })
+  ] });
   const logqlPanel = showLogql && logqlOpen && !analysis.error && /* @__PURE__ */ jsxs2("div", { className: "lqb-logql", children: [
     analysis.logql.branches.map((branch, i) => /* @__PURE__ */ jsxs2("div", { children: [
       /* @__PURE__ */ jsxs2("div", { className: "lqb-pre-h", children: [
@@ -833,9 +837,15 @@ var LogQLQueryBox = forwardRef(function LogQLQueryBox2(props, ref) {
       out.push(text.slice(last));
       return out;
     };
-    const hl = [...paint(query, "q"), "\u200B"];
+    const bad = analysis.errorAt;
+    const hl = bad ? [
+      ...paint(query.slice(0, bad[0]), "q"),
+      /* @__PURE__ */ jsx2("span", { className: "lqb-hl-bad", children: paint(query.slice(bad[0], bad[1]), "b") }, "bad"),
+      ...paint(query.slice(bad[1]), "r"),
+      "\u200B"
+    ] : [...paint(query, "q"), "\u200B"];
     const flat = (text) => text.replace(/\s+/g, " ").trim();
-    const pieces = analysis.parsed.children.length ? analysis.parsed.children.map((n) => flat(n.spans.map(([a, b]) => query.slice(a, b)).join(" "))) : [flat(query)];
+    const pieces = !bad && analysis.parsed.children.length ? analysis.parsed.children.map((n) => flat(n.spans.map(([a, b]) => query.slice(a, b)).join(" "))) : [flat(query)];
     const autoName = analysis.parsed.children.map((n) => n.type === "cond" ? n.parts ? n.parts.map((p) => p.v).join(", ") : String(n.value) : engine.chipText(n)).filter(Boolean).join(" \xB7 ").slice(0, 80);
     const failed = (e) => e instanceof Error ? e.message : String(e);
     const submitDraft = () => {
@@ -955,11 +965,11 @@ var LogQLQueryBox = forwardRef(function LogQLQueryBox2(props, ref) {
             /* @__PURE__ */ jsxs2("div", { className: "lqb-edit", children: [
               summarize ? /* @__PURE__ */ jsx2("div", { className: "lqb-summary", ref: sumRef, "data-overflow": fit.over || void 0, "aria-hidden": "true", children: pieces.map((p, i) => /* @__PURE__ */ jsxs2("span", { className: "lqb-piece", children: [
                 i > 0 && /* @__PURE__ */ jsx2("span", { className: "lqb-sep", children: ", " }),
-                paint(p, `p${i}`)
+                bad ? hl : paint(p, `p${i}`)
               ] }, i)) }) : /* @__PURE__ */ jsx2("div", { className: "lqb-hl", ref: hlRef, "aria-hidden": "true", children: hl }),
               textarea
             ] }),
-            summarize && fit.hidden > 0 && /* @__PURE__ */ jsx2("span", { className: "lqb-more", children: labels.hiddenFilters(fit.hidden) }),
+            summarize && fit.hidden > 0 && !bad && /* @__PURE__ */ jsx2("span", { className: "lqb-more", children: labels.hiddenFilters(fit.hidden) }),
             query && interactive && /* @__PURE__ */ jsxs2("span", { className: "lqb-field-acts", children: [
               /* @__PURE__ */ jsx2(
                 "button",
