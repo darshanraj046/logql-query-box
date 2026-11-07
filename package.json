@@ -68,7 +68,7 @@
     "dev": "vite demo --port 5199",
     "demo:build": "vite build demo --base=/logql-query-box/ --outDir ../site --emptyOutDir",
     "check": "npm run typecheck && npm test && npm run build",
-    "prepublishOnly": "npm run check"
+    "prepublishOnly": "node -e \"if (!process.env.GITHUB_ACTIONS) { console.error('Publish by creating a GitHub release. The Publish workflow adds npm provenance.'); process.exit(1) }\" && npm run check"
   },
   "peerDependencies": {
     "react": ">=18.0.0",

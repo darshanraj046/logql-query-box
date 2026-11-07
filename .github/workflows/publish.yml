@@ -1,0 +1,45 @@
+name: Publish
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - name: Use npm 11, which trusted publishing needs
+        run: npm install -g npm@11
+      - name: Check the tag matches package.json
+        run: |
+          version="v$(node -p "require('./package.json').version")"
+          if [ "$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Release tag $GITHUB_REF_NAME does not match package.json $version"
+            exit 1
+          fi
+      - run: npm ci
+      - run: npm run check
+      - name: Check the committed build is current
+        run: git diff --exit-code dist
+      - name: Start Loki
+        run: |
+          docker run -d --name loki --network host \
+            -v "$PWD/test/loki/loki-test.yaml:/etc/loki/test.yaml:ro" \
+            grafana/loki:3.5.0 -config.file=/etc/loki/test.yaml -config.expand-env=true
+      - run: npm run test:loki
+      - name: Publish with provenance
+        run: npm publish --provenance --access public ${{ github.event.release.prerelease && '--tag next' || '' }}

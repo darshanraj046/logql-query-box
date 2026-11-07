@@ -6,8 +6,18 @@ Security fixes are released for the latest version only.
 
 | Version | Supported |
 | --- | --- |
-| Latest 0.3.x | Yes |
+| Latest 0.5.x | Yes |
 | Older | No |
+
+## Verifying a release
+
+Releases from 0.5.4 on are published by the `Publish` GitHub Actions workflow with [npm provenance](https://docs.npmjs.com/generating-provenance-statements). The npm package page shows the source commit and the workflow run that built each version. To check the signatures and provenance of what you installed:
+
+```bash
+npm audit signatures
+```
+
+Versions up to 0.5.3 were published from a local machine and have no provenance.
 
 ## Reporting a vulnerability
 
