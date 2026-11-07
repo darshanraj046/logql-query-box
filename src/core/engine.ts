@@ -176,10 +176,21 @@ export function createEngine(options: EngineOptions = {}): Engine {
       for (let pass = 0; pass < 50; pass++) {
         const parsed = parseQuery(q)
         const node = parsed.error ? undefined : (parsed.children.find((n) => n.type === 'cond' && !!n.parts && (n.spans as Span[]).length > 1) as Cond | undefined)
-        if (!node) return q
+        if (!node) break
         q = editSpans(q, node.spans as Span[], termText(schema, node.field, node.parts as ValuePart[], isNegative(node)), schema)
       }
-      return q
+      let out = ''
+      let last = 0
+      for (const t of tokenize(q, schema).toks) {
+        if (t.t !== 'term' || !t.field) continue
+        const op = /([A-Za-z_][A-Za-z0-9_.]*)\s*(!=|!~|=~|=)\s*/y
+        op.lastIndex = q[t.s] === '-' ? t.s + 1 : t.s
+        const m = op.exec(q)
+        if (!m || m[0] === `${m[1]} ${m[2]} `) continue
+        out += `${q.slice(last, m.index)}${m[1]} ${m[2]} `
+        last = m.index + m[0].length
+      }
+      return out + q.slice(last)
     },
     replaceValue(query, field, from, to, negative = false) {
       const parsed = parseQuery(query)

@@ -174,6 +174,17 @@ describe('operator "="', () => {
     expect(apps.analyze('"oops').unknownValues).toEqual([])
   })
 
+  it('puts one space around operators and leaves quotes, regexes and colons alone', () => {
+    expect(e.combine('content =security')).toBe('content = security')
+    expect(e.combine('level=ERROR,WARN app!=pii')).toBe('level = ERROR,WARN app != pii')
+    expect(e.combine('-level  =   DEBUG')).toBe('-level = DEBUG')
+    expect(e.combine('content =~timeout|refused app !~^pii')).toBe('content =~ timeout|refused app !~ ^pii')
+    expect(e.combine('"a=b" /c=d/ app.type=JAVA')).toBe('"a=b" /c=d/ app.type = JAVA')
+    expect(e.combine('level:ERROR')).toBe('level:ERROR')
+    expect(e.combine('level=ERROR level=WARN')).toBe('level = ERROR,WARN')
+    for (const q of ['content =security', 'level=ERROR,WARN app!=pii', 'content =~timeout|refused']) expect(e.analyze(e.combine(q)).logql).toEqual(e.analyze(q).logql)
+  })
+
   it('combines repeated filters on the same field', () => {
     expect(e.combine('app != policy-evaluator app != pii')).toBe('app != policy-evaluator,pii')
     expect(e.combine('level = ERROR timeout level = WARN')).toBe('level = ERROR,WARN timeout')

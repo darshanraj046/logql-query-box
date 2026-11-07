@@ -344,7 +344,7 @@ result.filter
 | `chipText(node)`, `isNegative(node)` | Chip rendering. |
 | `highlightPattern(tree)` | A `RegExp` for highlighting matched text in log lines, or `null`. Leaves out risky regexes. |
 | `removeNode`, `toggleValue`, `appendTerm`, `clearField`, `activeValues` | Query text editing. |
-| `combine(query)` | Merges repeated filters on one field, `app != a app != b` to `app != a,b`. The LogQL does not change. |
+| `combine(query)` | Merges repeated filters on one field, `app != a app != b` to `app != a,b`, and puts one space around each operator, `content =security` to `content = security`. The box runs it on every run in `=` mode. The LogQL does not change. |
 | `replaceValue(query, field, from, to, negative?)` | Swaps one value or pattern, keeping the rest of the filter. `to` with `*` becomes a wildcard. |
 
 `analyze()` also returns `unknownValues`: values and field patterns that match no known value of their field, each with up to three close `matches`. It is empty for fields with no known values.

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.3
+
+Changed:
+
+- Running a query in `=` mode also puts one space on each side of the operator, so `content =security` becomes `content = security` and `level=ERROR` becomes `level = ERROR`. Quoted text, `/regex/` terms and `:` filters are left as typed, and the compiled LogQL is unchanged. Through `engine.combine()`.
+
 ## 0.5.2
 
 Fixed:

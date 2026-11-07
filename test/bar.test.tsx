@@ -122,6 +122,13 @@ describe('bar variant', () => {
     expect(onExecute).toHaveBeenLastCalledWith(expect.objectContaining({ query: 'app != policy-evaluator,pii-detector' }))
   })
 
+  it('tidies operator spacing when the query runs', async () => {
+    const { user, onExecute } = setup({ defaultValue: 'content =security level=ERROR' })
+    await user.click(screen.getByRole('button', { name: 'Run query' }))
+    expect(box()).toHaveValue('content = security level = ERROR')
+    expect(onExecute).toHaveBeenLastCalledWith(expect.objectContaining({ query: 'content = security level = ERROR' }))
+  })
+
   it('after a run, offers fixes for a value that matches nothing', async () => {
     const { user, onExecute } = setup({ defaultValue: 'app != policy-evaluator app != pii', values: { serviceName: ['pii-detector', 'pii-scanner', 'policy-evaluator'] } })
     expect(screen.queryByRole('status')).toBeNull()
