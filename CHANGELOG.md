@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.5
+
+Added:
+
+- `--lqb-bar-font-size` and `--lqb-bar-font-weight` on `.lqb-v-bar` set both the query text in the bar and the suggestion values under it, so they always match. Defaults 14px and 400, as before.
+
+Fixed:
+
+- The bar's clear and copy buttons size and centre themselves from `--lqb-bar-height` (`--lqb-bar-btn`, at most 30px). They sat a pixel low at the default height, and in a bar shorter than 38px they made the bar grow taller and pushed the Queries button off centre.
+
 ## 0.5.4
 
 Changed:

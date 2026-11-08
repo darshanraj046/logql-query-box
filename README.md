@@ -556,6 +556,8 @@ The bar adds its own variables on `.lqb-v-bar`:
 .lqb-v-bar {
   --lqb-bar-height: 40px;
   --lqb-bar-radius: 6px;
+  --lqb-bar-font-size: 13px;
+  --lqb-bar-font-weight: 500;
   --lqb-bar-bg: #f8fafc;
   --lqb-bar-bg-open: #fff;
   --lqb-field-color: #1d4ed8;
@@ -564,6 +566,8 @@ The bar adds its own variables on `.lqb-v-bar`:
   --lqb-panel-width: 440px;
 }
 ```
+
+`--lqb-bar-font-size` and `--lqb-bar-font-weight` set the query text in the bar and the suggestion values under it, so both always match. The clear and copy buttons size and centre themselves from `--lqb-bar-height`.
 
 All class names start with `lqb-`, and the stylesheet does not touch anything outside the component. For anything a variable does not cover, add your own class through `classNames` or target the `lqb-` classes.
 
