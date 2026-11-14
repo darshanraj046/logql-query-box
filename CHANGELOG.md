@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.6.0
+
+Upgrading from 0.5.x:
+
+- The bar variant now lays `=` mode queries out one filter per line (`stacked`, on by default). The text that `onChange`, `onExecute` and saved queries receive contains line breaks and aligned spaces, and the compiled LogQL is the same. Pass `stacked={false}` to keep one line.
+- Picking a value from the list no longer ends the term, and Enter takes the highlighted row, so press Escape and then Enter (or Cmd/Ctrl+Enter) to run while the list is open.
+- `engine.combine()` writes `a, b` with a space after the comma.
+- New schema options: `icon`, `valueIcons` and `freeText`. `freeText: false` is off by default, so plain words still search.
 
 Changed:
 
