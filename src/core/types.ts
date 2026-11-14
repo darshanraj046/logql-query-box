@@ -85,6 +85,7 @@ export interface Analysis {
   filter: ApiFilter | null
   riskyRegex: boolean
   unknownValues: UnknownValue[]
+  freeText?: { value: string; fix: string }
 }
 
 export interface UnknownValue {
@@ -113,6 +114,8 @@ export interface Suggestion {
   keep?: boolean
   caret?: number
   whole?: string
+  icon?: string
+  iconColor?: string
 }
 
 export interface SuggestionList {
@@ -124,6 +127,9 @@ export interface SuggestionList {
   note?: string
   search?: string
   more?: number
+  count?: number
+  finished?: boolean
+  back?: [number, number]
 }
 
 export interface SuggestExtras {

@@ -1189,7 +1189,7 @@ function quoteValue(v) {
 function termText(schema, field, parts, neg) {
   const primary = schema.fields.get(field)?.primary ?? field;
   const head = schema.operator === "=" ? `${primary}${neg ? " != " : " = "}` : `${neg ? "-" : ""}${primary}:`;
-  return `${head}${parts.map((p) => p.wild ? p.v : quoteValue(p.v)).join(",")}`;
+  return `${head}${parts.map((p) => p.wild ? p.v : quoteValue(p.v)).join(schema.operator === "=" ? ", " : ",")}`;
 }
 function tidy(q, schema) {
   const tk = tokenize(q, schema);
@@ -1269,6 +1269,34 @@ function clearField(q, parsed, schema, field) {
   if (parsed.error) return q;
   const spans = parsed.children.flatMap((n) => n.type === "cond" && n.field === field ? n.spans : []);
   return spans.length ? editSpans(q, spans, "", schema) : q;
+}
+function stackQuery(q, schema) {
+  if (schema.operator !== "=") return q;
+  const tk = tokenize(q, schema);
+  if (tk.error) return q;
+  const rows = [];
+  for (let i = 0; i < tk.toks.length; i++) {
+    const t = tk.toks[i];
+    const last = i === tk.toks.length - 1;
+    if (t.t === "term" && t.field && q[t.s] !== "-") {
+      const m = /([A-Za-z_][A-Za-z0-9_.]*)\s*(!=|!~|=~|=)\s*/y;
+      m.lastIndex = t.s;
+      const hit = m.exec(q);
+      if (!hit) return q;
+      rows.push({ name: hit[1], op: hit[2], value: t.parts ? t.parts.map((p) => p.wild ? p.v : quoteValue(p.v)).join(", ") : q.slice(hit.index + hit[0].length, t.e).trimEnd(), comma: !!t.parts });
+    } else if (last && t.t === "skip") {
+      const hit = /^([A-Za-z_][A-Za-z0-9_.]*)\s*(!=|!~|=~|=)?\s*$/.exec(q.slice(t.s, t.e));
+      if (!hit || !schema.alias.has(hit[1].toLowerCase())) return q;
+      rows.push({ name: hit[1], op: hit[2] ?? "", value: "", comma: false });
+    } else if (last && t.t === "term" && !t.field && t.kind === "word" && !t.neg && schema.alias.has(String(t.value).toLowerCase())) {
+      rows.push({ name: String(t.value), op: "", value: "", comma: false });
+    } else {
+      return q;
+    }
+  }
+  const width = Math.max(...rows.map((r) => r.name.length));
+  const opWidth = Math.max(...rows.map((r) => r.op.length));
+  return rows.map((r, i) => `${r.name.padEnd(width)} ${r.op ? `${r.op.padEnd(opWidth)} ` : ""}${r.value}${r.comma && rows[i + 1]?.op ? "," : ""}`).join("\n");
 }
 
 // src/core/schema.ts
@@ -1366,6 +1394,7 @@ function resolveSchema(schema, baseSelector = {}) {
       ...def,
       name,
       kind,
+      icon: def.icon ?? (schema.operator === "=" ? kind === "line" ? "lines" : "tag" : void 0),
       primary: names[0],
       synonyms: new Map(Object.entries(def.synonyms ?? {})),
       groups: resolveGroups(name, def.groups)
@@ -1390,6 +1419,7 @@ function resolveSchema(schema, baseSelector = {}) {
     excludeExample: schema.excludeExample ?? (schema.operator === "=" ? `${firstLabel ? firstLabel.primary : "field"} != value` : `${firstLabel ? firstLabel.primary : "field"}:value`),
     parser: schema.parser,
     operator: schema.operator ?? ":",
+    freeText: schema.freeText !== false,
     baseSelector: base
   };
 }
@@ -1405,7 +1435,7 @@ function hue(s) {
 }
 function colorOf(f, v) {
   if (typeof f.color === "function") return f.color(v);
-  if (f.color === "level") return `var(--lqb-lv-${v}, var(--lqb-faint))`;
+  if (f.color === "level") return `var(--lqb-lv-${v.toLowerCase()}, var(--lqb-faint))`;
   if (f.color === "hash") return `hsl(${hue(v)} 55% 55%)`;
   return "var(--lqb-accent)";
 }
@@ -1467,13 +1497,13 @@ function suggest(src, caret, schema, known, extras = {}) {
         ["!~", "Does not contain the text or match the pattern"]
       ];
       for (const [o, hint] of choices) items.push({ kind: "operator", label: `${lead.value} ${o}`, hint, replace: [lead.s, caret], text: `${src.slice(lead.s, lead.e)} ${o} `, keep: true });
-      return { head: `How should ${f.label} match?`, items, extra: [] };
+      return { head: `How should ${f.label} match?`, items, extra: [], note: "Press [Enter] to choose how it matches" };
     }
   }
   if (text === "-") {
     for (const f of labelFields(schema)) {
       const label = `-${f.primary}:`;
-      items.push({ kind: "field", label, hint: f.excludeHint ?? `Hide ${f.label}`, replace, text: label, keep: true });
+      items.push({ kind: "field", label, hint: f.excludeHint ?? `Hide ${f.label}`, replace, text: label, keep: true, icon: f.icon });
     }
     return { head: "Exclude (NOT). You can also type -word to hide lines containing it", items, extra: [] };
   }
@@ -1483,19 +1513,28 @@ function suggest(src, caret, schema, known, extras = {}) {
   const op = m ? m[2].trim() : "";
   const regexOp = op === "=~" || op === "!~";
   const isLine = name === schema.lineField;
-  if (eq && m && name && regexOp && !isLine) {
+  if (eq && m && name && regexOp) {
     const field = schema.fields.get(name);
     const head = `${neg}${m[1]}${m[2]}`;
     if (!m[3]) {
       const anchors = [
-        ["^", `Starts with the text you type next`, 1],
-        ["$", `Ends with the text you type next`, 0],
-        ["^$", `Is exactly the text you type next`, 1]
+        ["^", `${isLine ? "Line starts" : "Starts"} with the text you type next`, 1],
+        ["$", `${isLine ? "Line ends" : "Ends"} with the text you type next`, 0],
+        ["^$", `${isLine ? "Line is" : "Is"} exactly the text you type next`, 1]
       ];
       for (const [a, hint, at] of anchors) items.push({ kind: "operator", label: a === "^$" ? "^ \u2026 $" : a === "^" ? "^ \u2026" : "\u2026 $", hint, replace, text: head + a, caret: head.length + at, keep: true });
-      return { head: "Pattern", items, extra: [], note: `Or just type some text to match any ${field.label} that contains it.` };
+      const combine = [
+        ["\u2026 | \u2026", "Contains either one, for example timeout|refused", "|", 0],
+        ["\u2026 .* \u2026", "Contains both, in that order", ".*", 0],
+        ["\\b \u2026 \\b", "Contains it as a whole word, so error does not match errors", "\\b\\b", 2],
+        ["(?i) \u2026", "Ignores upper and lower case", "(?i)", 4],
+        ["\\Q \u2026 \\E", "Reads what you type as plain text, so . [ ( are not special", "\\Q\\E", 2]
+      ];
+      const extra2 = combine.map(([label, hint, text2, at]) => ({ kind: "operator", label, hint, replace, text: head + text2, caret: head.length + at, keep: true }));
+      return { head: "Position", items, extra: extra2, extraHead: "Combining text", note: isLine ? "Or just type a regular expression, for example timeout|refused." : `Or just type some text to match any ${field.label} that contains it.` };
     }
-    if (!m[3].replace(/^\^/, "").replace(/\$$/, "")) return { head: "", items: [], extra: [], note: `Now type the ${field.label} text.` };
+    if (!m[3].replace(/^\^/, "").replace(/\$$/, "")) return { head: "", items: [], extra: [], note: `Now type the ${isLine ? "text to find" : `${field.label} text`}.` };
+    if (isLine) return { head: "", items: [], extra: [] };
     const names = valueNames(field, known);
     if (!names.length) return NOTHING;
     let hits = [];
@@ -1510,53 +1549,81 @@ function suggest(src, caret, schema, known, extras = {}) {
     return { head: "", items: [], extra: [], note: hits.length ? `Matches ${hits.length} of ${names.length}: ${shown}` : `Matches no ${field.label}. ^ means starts with and $ means ends with, so ^text$ needs an exact name.` };
   }
   if (eq && m && name && (regexOp || isLine)) {
-    const note = !regexOp ? 'Type text to find in the log line. Use * as a wildcard and "quotes" for an exact phrase.' : isLine ? "Type a regular expression (RE2) to find in the log line, for example timeout|refused." : "Type a regular expression (RE2) found anywhere in the value, for example security. Use ^ and $ to anchor it, like ^checkout-";
+    const note = !regexOp ? 'Type text to find in the log line. Use * as a wildcard and "quotes" for an exact phrase.' : isLine ? "Type a regular expression to find in the log line, for example timeout|refused." : "Type a regular expression found anywhere in the value, for example security. Use ^ and $ to anchor it, like ^checkout-";
     return { head: "", items: [], extra: [], note: m[3] ? void 0 : note };
   }
   if (m && name && name !== schema.lineField) {
     const field = schema.fields.get(name);
     const rest = m[3];
     const lc = rest.lastIndexOf(",");
-    const prior = lc >= 0 ? rest.slice(0, lc + 1) : "";
-    const part = (lc >= 0 ? rest.slice(lc + 1) : rest).toLowerCase();
+    const part = (lc >= 0 ? rest.slice(lc + 1) : rest).trim().toLowerCase();
     const parts = tk.token?.parts ?? [];
-    const chosen = new Set((rest.endsWith(",") ? parts : parts.slice(0, -1)).map((p) => p.v.toLowerCase()));
-    const all = valueOptions(field, known).filter((o) => !chosen.has(o.v.toLowerCase()));
+    const trailing = rest.endsWith(",");
+    const last = trailing ? void 0 : parts[parts.length - 1];
+    const options = valueOptions(field, known);
+    const lastLow = last && !last.wild ? last.v.toLowerCase() : "";
+    const finished = eq && !!lastLow && options.some((o) => o.v.toLowerCase() === lastLow) && !options.some((o) => o.v.toLowerCase() !== lastLow && o.v.toLowerCase().includes(lastLow));
+    const kept = trailing || finished ? parts : parts.slice(0, -1);
+    const chosen = new Set(kept.map((p) => p.v.toLowerCase()));
+    for (const t of tokenize(src, schema).toks) if (t.t === "term" && t.field === name && t.s !== tk.s) t.parts?.forEach((p) => chosen.add(p.v.toLowerCase()));
+    const all = options.filter((o) => !chosen.has(o.v.toLowerCase()));
     const pre = all.filter((o) => !part || o.v.toLowerCase().indexOf(part) === 0);
-    const hits = eq && part ? [...pre, ...all.filter((o) => o.v.toLowerCase().indexOf(part) > 0)] : pre.length ? pre : all.filter((o) => o.v.toLowerCase().indexOf(part) >= 0);
+    const hits = finished ? all : eq && part ? [...pre, ...all.filter((o) => o.v.toLowerCase().indexOf(part) > 0)] : pre.length ? pre : all.filter((o) => o.v.toLowerCase().indexOf(part) >= 0);
     const counted = all.some((o) => o.n !== void 0);
     const cap = extras.limit && extras.limit > 0 ? extras.limit : hits.length;
+    const lead = eq ? `${neg}${m[1]} ${op} ` : `${neg}${m[1]}${m[2]}`;
+    const prior = eq ? kept.map((p) => `${p.wild ? p.v : quoteValue(p.v)}, `).join("") : lc >= 0 ? rest.slice(0, lc + 1) : "";
     for (const o of hits.slice(0, cap)) {
-      items.push({ kind: "value", label: o.v, hint: counted ? `${(o.n ?? 0).toLocaleString("en-US")} lines` : "", color: colorOf(field, o.v), replace, text: `${neg}${m[1]}${m[2]}${prior}${quoteValue(o.v)} `, keep: eq || void 0 });
+      items.push({
+        kind: "value",
+        label: o.v,
+        hint: counted ? `${(o.n ?? 0).toLocaleString("en-US")} lines` : "",
+        color: colorOf(field, o.v),
+        replace,
+        text: `${lead}${prior}${quoteValue(o.v)}${eq ? "" : " "}`,
+        keep: eq || void 0,
+        icon: field.valueIcons?.[o.v] ?? field.icon,
+        iconColor: field.valueIcons?.[o.v] ? colorOf(field, o.v) : void 0
+      });
     }
     const typed = (lc >= 0 ? rest.slice(lc + 1) : rest).trim();
-    if (eq && typed.length > 1 && !typed.includes("*") && !all.some((o) => o.v.toLowerCase() === part) && hits.some((o) => o.v.toLowerCase().includes(part))) {
-      items.push({ kind: "value", label: `*${typed}*`, sub: `${op === "!=" ? "Every" : "Any"} ${field.label} containing \u201C${typed}\u201D`, replace, text: `${neg}${m[1]}${m[2]}${prior}*${typed}* `, keep: true });
+    if (eq && !finished && typed.length > 1 && !typed.includes("*") && !all.some((o) => o.v.toLowerCase() === part) && hits.some((o) => o.v.toLowerCase().includes(part))) {
+      items.push({ kind: "value", label: `*${typed}*`, sub: `${op === "!=" ? "Every" : "Any"} ${field.label} containing \u201C${typed}\u201D`, replace, text: `${lead}${prior}*${typed}*`, keep: true, icon: field.icon });
     }
-    return { head: `Values for ${field.label}`, field: name, items, extra: [], search: typed, more: hits.length > cap ? hits.length - cap : void 0 };
+    return {
+      head: finished ? `Add another ${field.label}` : `Values for ${field.label}`,
+      field: name,
+      items,
+      extra: [],
+      search: finished ? "" : typed,
+      more: hits.length > cap ? hits.length - cap : void 0,
+      count: eq && items.length ? hits.length : void 0,
+      finished: finished || void 0,
+      back: eq && !typed && !kept.length ? replace : void 0,
+      note: !eq ? void 0 : !options.length ? `Type the ${field.label} you want. Use * as a wildcard.` : !items.length ? void 0 : finished ? "Press [Space] to filter by another field" : !typed && !kept.length ? "Press [Esc] to go back to fields" : "Press [Enter] to pick a value, or [,] to add another"
+    };
   }
   if (body) {
     const low = body.toLowerCase();
     for (const f of labelFields(schema)) {
       const label = `${f.primary}${sep}`;
       if (label.toLowerCase().indexOf(low) === 0 && (eq || label.toLowerCase() !== low)) {
-        items.push({ kind: "field", label: neg + label.trimEnd(), hint: f.hint ?? `Filter by ${f.label}`, replace, text: neg + label, keep: true });
+        items.push({ kind: "field", label: neg + label.trimEnd(), hint: f.hint ?? `Filter by ${f.label}`, replace, text: neg + label, keep: true, icon: f.icon });
       }
     }
     if (eq && schema.fields.get(schema.lineField)?.aliases?.some((a) => a.toLowerCase().indexOf(low) === 0)) {
       const f = schema.fields.get(schema.lineField);
-      items.push({ kind: "field", label: f.primary, hint: exampleOf(f, known), replace, text: `${neg}${f.primary} `, keep: true });
+      items.push({ kind: "field", label: f.primary, hint: exampleOf(f, known), replace, text: `${neg}${f.primary} `, keep: true, icon: f.icon });
     }
-    return { head: items.length ? "Fields" : "", items, extra: [] };
+    return { head: items.length ? "Fields" : "", items, extra: [], note: eq && items.length ? "Press [Enter] to pick a field, then choose a value" : void 0 };
   }
-  for (const f of labelFields(schema)) {
+  for (const f of eq ? [...schema.fields.values()] : labelFields(schema)) {
+    if (f.name === schema.lineField && !f.aliases?.length) continue;
     const label = `${f.primary}${sep}`;
-    items.push({ kind: "field", label: label.trimEnd(), hint: exampleOf(f, known), replace, text: label, keep: true });
+    items.push({ kind: "field", label: label.trimEnd(), hint: exampleOf(f, known), replace, text: label, keep: true, icon: f.icon });
   }
   if (eq) {
-    const f = schema.fields.get(schema.lineField);
-    if (f.aliases?.length) items.push({ kind: "field", label: f.primary, hint: exampleOf(f, known), replace, text: `${f.primary} `, keep: true });
-    return { head: "Fields", items, extra: [] };
+    return { head: "Fields", items, extra: [], note: "Press [Enter] to pick a field, then choose a value" };
   }
   items.push({ kind: "field", label: "-", hint: `Exclude, for example -${schema.excludeExample}`, replace, text: "-", keep: true });
   const extra = [];
@@ -1632,10 +1699,19 @@ function createEngine(options = {}) {
           if (!field || field === schema.lineField) continue;
           const f = schema.fields.get(field);
           const word = String(next.value ?? next.parts?.[0]?.v ?? "").replace(/,+$/, "").toLowerCase();
-          const names = [...f?.values ?? [], ...known.get(field)?.keys() ?? [], ...f?.synonyms.keys() ?? [], ...f?.groups.keys() ?? []].map((v) => v.toLowerCase());
-          if (!t.value.endsWith(",") && names.length && !names.includes(word)) continue;
+          const names2 = [...f?.values ?? [], ...known.get(field)?.keys() ?? [], ...f?.synonyms.keys() ?? [], ...f?.groups.keys() ?? []].map((v) => v.toLowerCase());
+          if (!t.value.endsWith(",") && names2.length && !names2.includes(word)) continue;
           const fix = `${query.slice(0, t.s)}${name} = ${query.slice(next.s)}`;
           return blocked(`\u201C${name}\u201D is a field, so it needs an operator, like ${name} = ${query.slice(next.s, next.e).replace(/,+$/, "")}. Without one this searches the log text for the word. To search for the word itself, write "${name}".`, [t.s, t.s + name.length], fix);
+        }
+        const names = [...schema.fields.values()].map((f) => f.primary);
+        for (let k = 0; k < toks.length - 1; k++) {
+          const t = toks[k];
+          const next = toks[k + 1];
+          if (t.t !== "term" || t.field || t.neg || t.kind !== "word" || next.t !== "term" || next.field || next.neg || next.kind !== "word") continue;
+          const name = String(t.value);
+          if (!/^[A-Za-z_][A-Za-z0-9_.]*$/.test(name) || schema.alias.has(name.toLowerCase()) || !/^(?:!=|!~|=~|=)/.test(String(next.value))) continue;
+          return blocked(`\u201C${name}\u201D is not a field. Use ${names.slice(0, -1).join(", ")} or ${names[names.length - 1]}. To search the log text for \u201C${name}\u201D, write it in quotes.`, [t.s, next.e]);
         }
       }
       const tree = activeExpanded(parsed.root);
@@ -1663,7 +1739,16 @@ function createEngine(options = {}) {
           unknownValues.push({ field: n2.field, value: p.v, negative: isNegative(n2), matches: names.filter((v) => v.toLowerCase().includes(low)).slice(0, 3) });
         }
       }
-      return { query, parsed, error, tree, logql, filter: tree ? toFilter(tree) : null, riskyRegex: !!tree && hasRiskyRegex(tree), unknownValues };
+      let freeText;
+      if (schema.operator === "=" && !schema.freeText) {
+        const t = tokenize(query, schema).toks.find((x) => x.t === "term" && !x.field && !x.neg && !(x.kind === "word" && schema.alias.has(String(x.value).toLowerCase())));
+        const line = schema.fields.get(schema.lineField)?.primary;
+        if (t && line) {
+          const raw = query.slice(t.s, t.e);
+          freeText = { value: raw, fix: `${query.slice(0, t.s)}${line} = ${raw}${query.slice(t.e)}` };
+        }
+      }
+      return { query, parsed, error, tree, logql, filter: tree ? toFilter(tree) : null, riskyRegex: !!tree && hasRiskyRegex(tree), unknownValues, freeText };
     },
     validate(query) {
       const parsed = parseQuery(query);
@@ -1676,13 +1761,23 @@ function createEngine(options = {}) {
       const walk = (n) => {
         if (n.type === "group") return n.children.forEach(walk);
         if (n.field !== schema.lineField) return;
-        if (n.op === "contains") sources.push(reEsc(valOf(n)));
-        else if (n.op === "regex" && !isRiskyRegex(valOf(n))) sources.push(toJsRegex(valOf(n), false, false).source);
+        if (n.op === "contains") sources.push({ s: reEsc(valOf(n)), ci: !matchCase });
+        else if (n.op === "regex" && !isRiskyRegex(valOf(n))) {
+          const re = toJsRegex(valOf(n), false, false);
+          sources.push({ s: re.source, ci: !matchCase || re.flags.includes("i") });
+        }
       };
       if (tree) walk(tree);
       if (!sources.length) return null;
       try {
-        return new RegExp(sources.join("|"), "giu");
+        if (sources.some((x) => x.ci !== sources[0].ci)) {
+          try {
+            return new RegExp(sources.map((x) => x.ci ? `(?i:${x.s})` : x.s).join("|"), "gu");
+          } catch {
+            return new RegExp(sources.map((x) => x.s).join("|"), "giu");
+          }
+        }
+        return new RegExp(sources.map((x) => x.s).join("|"), sources[0].ci ? "giu" : "gu");
       } catch {
         return null;
       }
@@ -1708,12 +1803,16 @@ function createEngine(options = {}) {
         const op = /([A-Za-z_][A-Za-z0-9_.]*)\s*(!=|!~|=~|=)\s*/y;
         op.lastIndex = q[t.s] === "-" ? t.s + 1 : t.s;
         const m = op.exec(q);
-        if (!m || m[0] === `${m[1]} ${m[2]} `) continue;
-        out += `${q.slice(last, m.index)}${m[1]} ${m[2]} `;
-        last = m.index + m[0].length;
+        if (!m) continue;
+        const values = t.parts && schema.operator === "=" ? t.parts.map((p) => p.wild ? p.v : quoteValue(p.v)).join(", ") : q.slice(m.index + m[0].length, t.e);
+        const text = `${m[1]} ${m[2]} ${values}`;
+        if (text === q.slice(m.index, t.e)) continue;
+        out += q.slice(last, m.index) + text;
+        last = t.e;
       }
       return out + q.slice(last);
     },
+    stack: (query) => stackQuery(query, schema),
     replaceValue(query, field, from, to, negative = false) {
       const parsed = parseQuery(query);
       const node = parsed.error ? void 0 : parsed.children.find((n) => n.type === "cond" && n.field === field && isNegative(n) === negative && (n.parts ? n.parts.some((p) => p.v === from) : valOf(n) === from));

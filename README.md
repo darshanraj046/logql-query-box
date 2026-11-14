@@ -91,7 +91,7 @@ With a `parser` on the schema, an OR stays in one query whenever LogQL can expre
 | `timeout` | Lines containing the word, not case sensitive |
 | `"connection refused"` | An exact phrase |
 | `-debug` | Lines that do not contain it |
-| `/\w+Exception/` | A regular expression (RE2) |
+| `/\w+Exception/` | A regular expression |
 | `level:error,warn` | Field is one of these values |
 | `level:error level:warn` | Same field repeated means OR |
 | `-level:debug` | Exclude a value |
@@ -104,6 +104,8 @@ With a `parser` on the schema, an OR stays in one query whenever LogQL can expre
 | `-(timeout OR refused)` | Exclude a whole group |
 
 Half typed input stays valid, so `a OR` or `level:` never shows an error while someone is still typing.
+
+With `operator: '='`, a name that is not a field, written with an operator, such as `nnjnd = x`, is an error that lists the fields and says to quote the text. `key=value` without spaces is still plain text. Add `freeText: false` to the schema to go further in the bar variant: a bare word or phrase is not searched either. The box shows a "This is not a field" card with a one-click `content = ...` fix, and `analysis.freeText` carries the word and the rewritten query.
 
 With `operator: '='`, a field name followed by one of its values but no operator, such as `level ERROR` or `level, ERROR`, is an error instead of a silent text search. The box underlines the field and offers `level = ERROR` as a one-click fix. Quote the word, `"level"`, to search the log text for it. The check only fires when the next word is a known value of that field, or the field name ends with a comma, or the field has no known values to compare with, so ordinary text such as `error app crashed` still searches the log text.
 
@@ -159,6 +161,7 @@ Free text is not case sensitive. Field values are exact, so `app:Billing` and `a
 | `classNames` | `Partial<Record<LogQLQueryBoxSlot, string>>` | | Extra classes on `bar`, `field`, `input`, `queriesButton`, `queriesPanel`, `suggestions`, `run`. |
 | `showQueries`, `showRun` | `boolean` | `true` | Bar only. Hide the Queries button or the Run query button. |
 | `showValueCounts` | `boolean` | `true` | Show the `1,234 lines` count next to each value suggestion. Counts still decide the order. |
+| `stacked` | `boolean` | `true` | Bar variant with `operator: '='`; pass `false` to keep everything on one line. Lays the text out one filter per line with the operators lined up, applied on run, on blur and as you pick from the list. `engine.stack(query)` does the same. A query with free text, parentheses, OR/AND or a minus sign is left as typed. |
 | `savedCount`, `savedLoading` | `number`, `boolean` | | Bar only. Count on the Queries button (defaults to `saved.length`) and a loading row. |
 | `onSelectSaved`, `onPinSaved`, `onEditSaved`, `onDeleteSaved` | `(saved, pinned?) => void` | | Bar only. Each row action shows only when its callback is set. `onEditSaved` is for your own edit UI. |
 | `onSaveQuery` | `({ name, query, pinned }, existing?) => unknown` | | Bar only. Save opens the built in "Save query as" popover: a name made from the filter values, a pin checkbox and a preview. Return a promise to show "Saving…", and reject it to show the error in the popover. Without it, Save calls `onSave` for your own dialog. |
@@ -223,7 +226,11 @@ const schema = {
 - `selectorField` picks the label used for the fallback `=~".+"` selector. It defaults to the first `baseSelector` label, then the first indexed field.
 - An invalid schema throws a clear error on first render.
 
-Other field options: `values` (a fixed list), `synonyms` (`{ prod: 'production' }`), `groups` (below), `lowercase`, `color` (`'level'`, `'hash'`, `'accent'` or a function), `hint`, `excludeHint`, `example`.
+Other field options: `values` (a fixed list), `synonyms` (`{ prod: 'production' }`), `groups` (below), `lowercase`, `color` (`'level'`, `'hash'`, `'accent'` or a function), `hint`, `excludeHint`, `example`, `icon` and `valueIcons` (below).
+
+After `=~` or `!~`, the bar lists the pattern helpers for every field: Position (`^ …`, `… $`, `^ … $`) and Combining text (`… | …`, `… .* …`, `\b … \b`, `(?i) …`, `\Q … \E`). Each inserts the marker and leaves the caret where the text goes.
+
+In the bar variant with `operator: '='`, every suggestion row can carry an icon. `icon` names one for the field and its values, and `valueIcons` names one per value, such as `{ ERROR: 'error', WARN: 'warn' }`, tinted by the field's `color` function. Built in: `tag` (the default for a field), `lines` (the default for the line field), `bars`, `cube`, `code`, `trace`, `span`, `error`, `warn`, `info`, `terminal` and `pulse`.
 
 ### Value groups
 
@@ -344,7 +351,7 @@ result.filter
 | `chipText(node)`, `isNegative(node)` | Chip rendering. |
 | `highlightPattern(tree)` | A `RegExp` for highlighting matched text in log lines, or `null`. Leaves out risky regexes. |
 | `removeNode`, `toggleValue`, `appendTerm`, `clearField`, `activeValues` | Query text editing. |
-| `combine(query)` | Merges repeated filters on one field, `app != a app != b` to `app != a,b`, and puts one space around each operator, `content =security` to `content = security`. The box runs it on every run in `=` mode. The LogQL does not change. |
+| `combine(query)` | Merges repeated filters on one field, `app != a app != b` to `app != a, b`, and puts one space around each operator and after each comma, `content =security` to `content = security`. The box runs it on every run and when the box loses focus in `=` mode. The LogQL does not change. |
 | `replaceValue(query, field, from, to, negative?)` | Swaps one value or pattern, keeping the rest of the filter. `to` with `*` becomes a wildcard. |
 
 `analyze()` also returns `unknownValues`: values and field patterns that match no known value of their field, each with up to three close `matches`. It is empty for fields with no known values.
@@ -397,10 +404,10 @@ const schema: Schema = {
   parser: 'json',
   operator: '=',
   fields: {
-    logLevel: { label: 'level', aliases: ['level'], values: ['ERROR', 'WARN', 'INFO', 'DEBUG', 'NONE'], example: 'Severity of the line. Pick one or more of ERROR, WARN, INFO, DEBUG, NONE' },
-    serviceName: { label: 'app', aliases: ['app'], example: 'Service that wrote the line' },
-    serviceType: { label: 'app.type', aliases: ['app.type'], values: ['JAVA', 'NODE', 'GO', 'PYTHON'], example: 'Runtime of the service' },
-    content: { label: 'content', kind: 'line', parsed: true, aliases: ['content'], example: 'Text inside the line. Use * as a wildcard' }
+    logLevel: { label: 'level', aliases: ['level'], values: ['ERROR', 'WARN', 'INFO', 'DEBUG', 'NONE'], example: 'Severity of the log entry' },
+    serviceName: { label: 'app', aliases: ['app'], example: 'Application that emitted the log entry' },
+    serviceType: { label: 'app.type', aliases: ['app.type'], values: ['JAVA', 'NODE', 'GO', 'PYTHON'], example: 'Type of the application' },
+    content: { label: 'content', kind: 'line', parsed: true, aliases: ['content'], example: 'Log message text. Use * as a wildcard' }
   }
 }
 
@@ -491,16 +498,19 @@ Deleting a saved query asks first, inside the row: *Delete "JVM & Node failures"
 
 ### `field = value` syntax
 
-Set `operator: '='` on the schema to write `level = ERROR,WARN` instead of `level:error,warn`. Both forms still parse, and everything the box writes uses the operator.
+Set `operator: '='` on the schema to write `level = ERROR, WARN` instead of `level:error,warn`. Both forms still parse, and everything the box writes uses the operator.
 
 | Query | Meaning |
 | --- | --- |
-| `level = ERROR,WARN` | Level is ERROR or WARN |
+| `level = ERROR, WARN` | Level is ERROR or WARN |
 | `level != DEBUG` | Level is not DEBUG |
-| `app.type != JAVA,GO` | Exclude several values |
-| `app =~ security` | Regular expression (RE2) found anywhere in the value, like grep |
+| `app.type != JAVA, GO` | Exclude several values |
+| `app =~ security` | Regular expression found anywhere in the value, like grep |
 | `app =~ ^(billing\|checkout)-` | Use `^` and `$` to anchor it |
 | `app !~ ^pii` | Does not match the regular expression |
+| `content =~ \berror\b` | `\b` matches a whole word, so `errors` does not match |
+| `content =~ (?i)timeout` | `(?i)` ignores upper and lower case for this pattern |
+| `content =~ \Qa.b(c\E` | `\Q ... \E` reads the text as it is, so `.` and `(` are not special |
 | `content =~ timeout\|refused` | Regular expression found anywhere in the line |
 | `app = /checkout-.*/` | Slashes also mean a regular expression |
 | `app.type = JAVA` | Aliases may contain dots. Loki label names still may not. |
@@ -513,10 +523,12 @@ const schema: Schema = {
   parser: 'json',
   operator: '=',
   fields: {
-    logLevel: { label: 'level', aliases: ['level'], values: ['ERROR', 'WARN', 'INFO', 'DEBUG', 'NONE'], example: 'Log level: ERROR, WARN, INFO, DEBUG, NONE' },
-    serviceName: { label: 'app', aliases: ['app'], example: 'App that wrote the log line' },
-    serviceType: { label: 'app.type', aliases: ['app.type'], values: ['JAVA', 'NODE', 'GO', 'PYTHON'], example: 'Runtime: JAVA, NODE, GO, PYTHON' },
-    content: { label: 'content', kind: 'line', parsed: true, aliases: ['content'], example: 'Text in the log line, use * as wildcard' }
+    logLevel: { label: 'level', aliases: ['level'], values: ['ERROR', 'WARN', 'INFO', 'DEBUG', 'NONE'], example: 'Severity of the log entry' },
+    serviceName: { label: 'app', aliases: ['app'], example: 'Application that emitted the log entry' },
+    serviceType: { label: 'app.type', aliases: ['app.type'], values: ['JAVA', 'NODE', 'GO', 'PYTHON'], example: 'Type of the application' },
+    content: { label: 'content', kind: 'line', parsed: true, aliases: ['content'], example: 'Log message text. Use * as a wildcard' },
+    traceId: { label: 'traceId', aliases: ['traceId'], example: 'ID of the trace associated with the log entry' },
+    spanId: { label: 'spanId', aliases: ['spanId'], example: 'ID of the span associated with the log entry' }
   }
 }
 ```
@@ -532,7 +544,7 @@ The suggestion list walks people through a filter one step at a time, so nobody 
 
 When the query runs:
 
-- Repeated filters on the same field are merged in the text. `app != policy-evaluator app != pii` becomes `app != policy-evaluator,pii`. The LogQL is the same either way.
+- Repeated filters on the same field are merged in the text. `app != policy-evaluator app != pii` becomes `app != policy-evaluator, pii`. The LogQL is the same either way.
 - If a value matches no known value, a line under the bar says so and offers one-click fixes: *No app is exactly "pii", so nothing was excluded. Did you mean:* `pii-detector`, *Every app containing "pii"*. It only appears for fields with known values (`values`, `loadValues` or the schema), and disappears as soon as the query is edited.
 
 The engine exposes the same pieces for your own UI: `analysis.unknownValues`, `engine.combine(query)` and `engine.replaceValue(query, field, from, to, negative)`.

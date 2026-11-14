@@ -1,25 +1,15 @@
-import {
-  forwardRef,
-  useEffect,
-  useId,
-  useImperativeHandle,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type CSSProperties,
-  type KeyboardEvent,
-  type ReactNode
-} from 'react'
+import { forwardRef, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
 import { chipLabel, createEngine, type Analysis, type Span, type Engine, type FieldValue, type FieldValues, type SavedQuery, type Schema, type Suggestion } from '../core'
 import { HelpDialog } from './HelpDialog'
+import { FIELD_ICONS } from './icons'
 import { defaultExamples, defaultLabels, defaultNotes, defaultSyntax, type Labels } from './labels'
 
 const useIsoLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect
 const RECENT_LIMIT = 8
 const CHIP_LIMIT = 50
 const MENU_GAP = 6
-const MENU_MAX = 300
+const LIST_GAP = 2
+const MENU_MAX = 360
 const MENU_MIN = 120
 const SEARCH_DELAY = 250
 const ICON = { width: 17, height: 17, viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round', 'aria-hidden': true } as const
@@ -44,6 +34,7 @@ export interface LogQLQueryBoxProps {
   showQueries?: boolean
   showRun?: boolean
   showValueCounts?: boolean
+  stacked?: boolean
   savedCount?: number
   savedLoading?: boolean
   onSelectSaved?: (saved: SavedQuery) => void
@@ -166,6 +157,7 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
     showQueries = true,
     showRun = true,
     showValueCounts = true,
+    stacked = true,
     savedCount,
     savedLoading = false,
     onSelectSaved,
@@ -186,6 +178,7 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
     style
   } = props
   const bar = variant === 'bar'
+  const stack = bar && stacked
   const rows = props.rows ?? (bar ? 1 : 2)
   const labels = useMemo(() => ({ ...defaultLabels, ...props.labels }), [props.labels])
   const baseKey = JSON.stringify(baseSelector)
@@ -207,6 +200,10 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
   const [focused, setFocused] = useState(false)
   const [qOpen, setQOpen] = useState(false)
   const [qText, setQText] = useState('')
+  const [muted, setMuted] = useState<string | null>(null)
+  const [tip, setTip] = useState<{ title: string; body?: string; x: number; y: number } | null>(null)
+  const tipRef = useRef<HTMLDivElement>(null)
+  const [fixAt, setFixAt] = useState(0)
 
   const qBtnRef = useRef<HTMLButtonElement>(null)
   const qPanelRef = useRef<HTMLDivElement>(null)
@@ -234,7 +231,10 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
   const recentList = recent ?? storedRecent
   const interactive = !disabled && !readOnly
 
-  const sugg = useMemo(() => (menu && interactive ? engine.suggest(query, menu.caret, bar ? { limit: maxSuggestions } : { saved, recent: recentList, limit: maxSuggestions }) : null), [menu, interactive, engine, query, saved, recentList, bar, maxSuggestions])
+  const sugg = useMemo(
+    () => (menu && interactive ? engine.suggest(query, menu.caret, bar ? { limit: maxSuggestions } : { saved, recent: recentList, limit: maxSuggestions }) : null),
+    [menu, interactive, engine, query, saved, recentList, bar, maxSuggestions]
+  )
   const items = useMemo<Suggestion[]>(() => (sugg ? [...sugg.items, ...sugg.extra] : []), [sugg])
   const open = items.length > 0
   const at = menu ? Math.min(menu.at, items.length - 1) : -1
@@ -242,7 +242,27 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
   const search = searchValues && valueField ? (sugg?.search ?? '') : ''
   const waiting = !!valueField && loading.includes(valueField)
   const note = sugg?.note ?? (bar && analysis.error ? analysis.error : undefined)
-  const shown = open || waiting || !!note
+  const unknown = query === checked && muted !== query && interactive ? analysis.unknownValues[0] : undefined
+  const unknownField = unknown ? engine.schema.fields.get(unknown.field) : undefined
+  const unknownLabel = unknown ? (unknownField?.label ?? unknown.field) : ''
+  const unknownLit = unknown ? unknown.value.replace(/^\^/, '').replace(/\$$/, '') : ''
+  const unknownAt = unknown ? query.lastIndexOf(unknown.value) : -1
+  const notFoundBody = unknown ? labels.notFoundBody(unknownLabel, unknown.value, !!unknown.regex, unknown.negative, unknown.matches.length > 0) : ''
+  const loose = query === checked && muted !== query && interactive && bar ? analysis.freeText : undefined
+  const fixes: { title: string; icon: string; next: string }[] = loose
+    ? [{ title: labels.fixSearchText(loose.value), icon: 'lines', next: loose.fix }]
+    : unknown
+      ? [
+          ...unknown.matches.map((v) => ({ title: labels.fixUse(v), icon: unknownField?.icon ?? 'tag', next: engine.replaceValue(query, unknown.field, unknown.value, v, unknown.negative) })),
+          ...(unknown.regex && unknownAt >= 0 && /^\^[\w.-]+\$?$/.test(unknown.value) && unknown.matches.length > 0
+            ? [{ title: labels.fixStarting(unknownLabel, unknownLit, unknown.negative), icon: 'asterisk', next: query.slice(0, unknownAt) + `^${unknownLit}` + query.slice(unknownAt + unknown.value.length) }]
+            : []),
+          ...(unknown.matches.length > 1 ? [{ title: labels.fixContaining(unknownLabel, unknownLit, unknown.negative), icon: 'asterisk', next: engine.replaceValue(query, unknown.field, unknown.value, `*${unknownLit}*`, unknown.negative) }] : [])
+        ]
+      : []
+  const noticeOpen = bar && (!!unknown || !!loose)
+  const shown = !noticeOpen && (open || waiting || !!note)
+  const pickedFix = Math.min(fixAt, fixes.length - 1)
 
   const usable = (text: string) => [...text.matchAll(/(?:^|[\s(`-])([A-Za-z_][A-Za-z0-9_]*):/g)].every((m) => engine.schema.alias.has(m[1].toLowerCase()))
   const shownExamples = examples ?? defaultExamples.filter(usable)
@@ -327,16 +347,19 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
       const upward = below < Math.min(list.scrollHeight, MENU_MAX) && above > below
       list.style.left = `${box.left}px`
       list.style.width = `${box.width}px`
-      list.style.top = upward ? 'auto' : `${box.bottom + MENU_GAP}px`
-      list.style.bottom = upward ? `${window.innerHeight - box.top + MENU_GAP}px` : 'auto'
+      list.style.top = upward ? 'auto' : `${box.bottom + LIST_GAP}px`
+      list.style.bottom = upward ? `${window.innerHeight - box.top + LIST_GAP}px` : 'auto'
       list.style.maxHeight = `${Math.max(MENU_MIN, Math.min(MENU_MAX, upward ? above : below))}px`
     }
     place()
     window.addEventListener('resize', place)
     window.addEventListener('scroll', place, true)
+    const watch = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(place)
+    watch?.observe(anchor)
     return () => {
       window.removeEventListener('resize', place)
       window.removeEventListener('scroll', place, true)
+      watch?.disconnect()
     }
   }, [shown, items, waiting])
 
@@ -346,6 +369,27 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
   const saveBtnRef = useRef<HTMLButtonElement>(null)
   const savePopRef = useRef<HTMLDivElement>(null)
   const expanded = bar && (focused || !!draft) && !qOpen && !!query
+
+  const showTip = (el: HTMLElement, title: string, body?: string) => {
+    const r = el.getBoundingClientRect()
+    setTip({ title, body, x: r.left + r.width / 2, y: r.bottom + 6 })
+  }
+
+  useIsoLayoutEffect(() => {
+    const el = tipRef.current
+    if (!tip || !el) return
+    if ('showPopover' in el && !el.matches(':popover-open')) {
+      el.setAttribute('popover', 'manual')
+      el.showPopover()
+    }
+    const w = el.offsetWidth
+    el.style.left = `${Math.max(8, Math.min(tip.x - w / 2, window.innerWidth - w - 8))}px`
+    el.style.top = `${tip.y}px`
+  }, [tip])
+
+  useEffect(() => {
+    if (!qOpen) setTip(null)
+  }, [qOpen])
 
   useEffect(() => {
     if (qOpen) return
@@ -363,7 +407,7 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
     }
     const place = () => {
       const box = btn.getBoundingClientRect()
-      const width = Math.min(360, window.innerWidth - 16)
+      const width = Math.min(280, window.innerWidth - 16)
       pop.style.width = `${width}px`
       pop.style.left = `${Math.max(8, Math.min(box.right - width, window.innerWidth - width - 8))}px`
       pop.style.top = `${box.bottom + MENU_GAP}px`
@@ -422,7 +466,7 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
     }
     const place = () => {
       const box = btn.getBoundingClientRect()
-      const width = Math.min(400, window.innerWidth - 16)
+      const width = Math.min(380, window.innerWidth - 16)
       panel.style.width = `${width}px`
       panel.style.left = `${Math.max(8, Math.min(box.right - width, window.innerWidth - width - 8))}px`
       panel.style.top = `${box.bottom + MENU_GAP + 4}px`
@@ -464,10 +508,19 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
   }
 
   const execute = (raw: string = query): boolean => {
-    const q = engine.schema.operator === '=' ? engine.combine(raw) : raw
+    const merged = engine.schema.operator === '=' ? engine.combine(raw) : raw
+    const q = stack ? engine.stack(merged) : merged
     const result = engine.analyze(q)
     if (result.error) return false
+    if (bar && result.freeText) {
+      if (q !== raw) change(q)
+      setFixAt(0)
+      setMuted(null)
+      setChecked(q)
+      return false
+    }
     if (q !== raw) change(q)
+    setFixAt(0)
     setRan(q)
     setChecked(q)
     remember(q)
@@ -496,9 +549,11 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
     }
     const [s, e] = it.replace as [number, number]
     const text = it.text as string
-    const pos = s + (it.caret ?? text.length)
+    const next = query.slice(0, s) + text + query.slice(e)
+    const laid = stack && it.caret == null && e >= query.length ? engine.stack(next) : next
+    const pos = laid !== next ? laid.length : s + (it.caret ?? text.length)
     pendingCaret.current = pos
-    change(query.slice(0, s) + text + query.slice(e))
+    change(laid)
     setMenu(it.keep ? { caret: pos, at: 0 } : null)
   }
 
@@ -506,6 +561,15 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.nativeEvent.isComposing || e.keyCode === 229) return
+    if (noticeOpen && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey && (e.key === 'Escape' || (fixes.length > 0 && ['ArrowDown', 'ArrowUp', 'Enter'].includes(e.key)))) {
+      e.preventDefault()
+      e.stopPropagation()
+      if (e.key === 'ArrowDown') setFixAt((pickedFix + 1) % fixes.length)
+      else if (e.key === 'ArrowUp') setFixAt((pickedFix - 1 + fixes.length) % fixes.length)
+      else if (e.key === 'Escape') setMuted(query)
+      else commit(fixes[pickedFix].next)
+      return
+    }
     if (e.key === 'ArrowDown') {
       if (open) {
         e.preventDefault()
@@ -520,7 +584,7 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
         setMenu((m) => m && { ...m, at: (at - 1 + items.length) % items.length })
       }
     } else if (e.key === 'Tab') {
-      if (open && !e.shiftKey && (currentToken() || items[at]?.kind === 'operator')) {
+      if (open && !e.shiftKey && !sugg?.finished && (currentToken() || items[at]?.kind === 'operator')) {
         e.preventDefault()
         accept(at)
       }
@@ -528,14 +592,21 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
       e.preventDefault()
       const it = open && !e.metaKey && !e.ctrlKey ? items[at] : undefined
       const cur = currentToken()
-      if (it?.kind === 'value' && (cur.indexOf(':') > 0 || (engine.schema.operator === '=' && cur.indexOf('=') > 0)) && it.text?.trim() !== cur) accept(at)
+      if (engine.schema.operator === '=' && (it?.kind === 'operator' || (it?.kind === 'field' && (!!cur || !query.trim())))) accept(at)
+      else if (it?.kind === 'value' && (cur.indexOf(':') > 0 || (engine.schema.operator === '=' && cur.indexOf('=') > 0)) && it.text?.trim() !== cur) accept(at)
       else if (it?.whole != null && !cur && !query.trim()) accept(at)
       else {
         setMenu(null)
         if (!running) execute()
       }
     } else if (e.key === 'Escape') {
-      if (shown) {
+      if (shown && sugg?.back) {
+        e.stopPropagation()
+        const [s, end] = sugg.back
+        pendingCaret.current = s
+        change(query.slice(0, s) + query.slice(end))
+        setMenu({ caret: s, at: 0 })
+      } else if (shown) {
         e.stopPropagation()
         setMenu(null)
       } else {
@@ -595,30 +666,43 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
     clearTimeout(copyTimer.current)
     setCopied({ index, text: ok ? labels.copied : labels.copyFailed })
     copyTimer.current = setTimeout(() => setCopied(null), 1300)
+    return ok
   }
 
   const rootClass = ['lqb', className].filter(Boolean).join(' ')
   const themeAttr = theme === 'auto' ? undefined : theme
   const blurb = description === undefined ? labels.description : description
 
-  const row = (it: Suggestion, i: number) => (
-    <div
-      key={`${it.kind}-${it.label}-${i}`}
-      className="lqb-sg"
-      role="option"
-      id={optionId(i)}
-      aria-selected={i === at}
-      onMouseDown={(e) => {
-        e.preventDefault()
-        accept(i)
-      }}
-    >
-      {it.color && <i style={{ '--lqb-c': it.color } as CSSProperties} />}
-      <code>{it.label}</code>
-      {it.sub && <span className="lqb-hint lqb-sub">{it.sub}</span>}
-      <span className="lqb-hint">{it.kind === 'value' && !showValueCounts ? '' : (it.hint ?? '')}</span>
-    </div>
-  )
+  const row = (it: Suggestion, i: number) => {
+    const selected = i === at
+    return (
+      <div
+        key={`${it.kind}-${it.label}-${i}`}
+        className="lqb-sg"
+        role="option"
+        id={optionId(i)}
+        aria-selected={selected}
+        onMouseMove={() => i !== at && setMenu((m) => m && { ...m, at: i })}
+        onMouseDown={(e) => {
+          e.preventDefault()
+          accept(i)
+        }}
+      >
+        {it.icon && FIELD_ICONS[it.icon] && (
+          <span className="lqb-sg-ic" aria-hidden="true" style={it.iconColor ? ({ color: it.iconColor } as CSSProperties) : undefined}>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+              {FIELD_ICONS[it.icon]}
+            </svg>
+          </span>
+        )}
+        {it.color && <i style={{ '--lqb-c': it.color } as CSSProperties} />}
+        <code>{it.label}</code>
+        {it.sub && <span className="lqb-hint lqb-sub">{it.sub}</span>}
+        <span className="lqb-hint">{it.kind === 'value' && !showValueCounts ? '' : (it.hint ?? '')}</span>
+        {bar && selected && it.kind === 'value' && <kbd className="lqb-key">Enter</kbd>}
+      </div>
+    )
+  }
 
   const textarea = (
     <textarea
@@ -652,6 +736,9 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
       onBlur={() => {
         setFocused(false)
         setMenu(null)
+        const merged = engine.schema.operator === '=' ? engine.combine(query) : query
+        const tidy = stack ? engine.stack(merged) : merged
+        if (tidy !== query) change(tidy)
       }}
       onKeyDown={onKeyDown}
       onKeyUp={(e) => {
@@ -669,20 +756,25 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
         <div role="group" aria-label={sugg.head || labels.ariaLabel}>
           {sugg.head && (
             <div className="lqb-sg-h" aria-hidden="true">
-              {sugg.head}
+              <span>{sugg.head}</span>
+              {sugg.count != null && <span className="lqb-sg-count">{labels.available(sugg.count)}</span>}
             </div>
           )}
           {sugg.items.map((it, i) => row(it, i))}
         </div>
       )}
       {!!sugg.more && <div className="lqb-sg-note lqb-sg-more">{labels.moreValues(sugg.more)}</div>}
-      {note && <div className={sugg.note ? 'lqb-sg-note' : 'lqb-sg-note lqb-sg-err'}>{note}</div>}
       {sugg.extra.length > 0 && (
         <div role="group" aria-label={sugg.extraHead ?? labels.savedAndRecent}>
           <div className="lqb-sg-h" aria-hidden="true">
             {sugg.extraHead ?? labels.savedAndRecent}
           </div>
           {sugg.extra.map((it, i) => row(it, i + sugg.items.length))}
+        </div>
+      )}
+      {note && (
+        <div className={sugg.note ? (sugg.note.startsWith('Press ') ? 'lqb-sg-note lqb-sg-keys' : 'lqb-sg-note') : 'lqb-sg-note lqb-sg-err'}>
+          {sugg.note?.startsWith('Press ') ? sugg.note.split(/\[([^\]]*)\]/).map((p, k) => (k % 2 ? <kbd key={k}>{p}</kbd> : p)) : note}
         </div>
       )}
       {waiting && (
@@ -699,32 +791,98 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
     </span>
   )
 
-  const unknown = query === checked && interactive ? analysis.unknownValues[0] : undefined
-  const unknownLabel = unknown ? (engine.schema.fields.get(unknown.field)?.label ?? unknown.field) : ''
-  const unknownBox = unknown && (
-    <div className="lqb-unknown" role="status">
-      <span>{unknown.regex ? labels.unknownPattern(unknownLabel, unknown.value, unknown.negative, unknown.matches.length > 0) : labels.unknownValue(unknownLabel, unknown.value, unknown.negative, unknown.matches.length > 0)}</span>
-      {unknown.matches.map((v) => (
-        <button type="button" key={v} className="lqb-fix" onClick={() => commit(engine.replaceValue(query, unknown.field, unknown.value, v, unknown.negative))}>
-          {v}
-        </button>
-      ))}
-      {unknown.regex && /^\^[\w.-]+\$?$/.test(unknown.value) && unknown.matches.length > 0 && (
-        <button type="button" className="lqb-fix" onClick={() => commit(engine.replaceValue(query, unknown.field, unknown.value, `${unknown.value.replace(/^\^/, '').replace(/\$$/, '')}*`, unknown.negative))}>
-          {labels.startingWith(unknownLabel, unknown.value.replace(/^\^/, '').replace(/\$$/, ''), unknown.negative)}
-        </button>
-      )}
-      {unknown.matches.length > 1 && (
-        <button type="button" className="lqb-fix" onClick={() => commit(engine.replaceValue(query, unknown.field, unknown.value, `*${unknown.value.replace(/^\^/, '').replace(/\$$/, '')}*`, unknown.negative))}>
-          {labels.containing(unknownLabel, unknown.value.replace(/^\^/, '').replace(/\$$/, ''), unknown.negative)}
-        </button>
-      )}
-    </div>
+  const dismiss = (
+    <button type="button" className="lqb-unknown-x" aria-label={labels.dismiss} title={labels.dismiss} onMouseDown={(e) => e.preventDefault()} onClick={() => setMuted(query)}>
+      <svg {...ICON} width={14} height={14}>
+        <path d="M6 6l12 12M18 6L6 18" />
+      </svg>
+    </button>
   )
+  const unknownBox =
+    (unknown || loose) &&
+    (bar ? (
+      <div className="lqb-nf" role="status" onMouseDown={(e) => e.preventDefault()}>
+        <div className="lqb-nf-head">
+          <span className="lqb-nf-ic" aria-hidden="true">
+            <svg {...ICON} width={14} height={14}>
+              {FIELD_ICONS.warn}
+            </svg>
+          </span>
+          <div className="lqb-nf-text">
+            <div className="lqb-nf-title">
+              {unknown ? labels.notFoundTitle(unknownLabel, !!unknown.regex) : labels.notFieldTitle} <code>{unknown ? unknown.value : loose?.value}</code>
+            </div>
+            {(unknown ? notFoundBody : labels.notFieldBody) && <div className="lqb-nf-desc">{(unknown ? notFoundBody : labels.notFieldBody).split(/`([^`]*)`/).map((p, k) => (k % 2 ? <code key={k}>{p}</code> : p))}</div>}
+          </div>
+          {dismiss}
+        </div>
+        {fixes.length > 0 && (
+          <div role="group" aria-label={labels.didYouMean}>
+            <div className="lqb-sg-h" aria-hidden="true">
+              {labels.didYouMean}
+            </div>
+            {fixes.map((f, i) => (
+              <div
+                key={f.title}
+                className="lqb-sg lqb-nf-fix"
+                role="button"
+                aria-pressed={i === pickedFix}
+                data-selected={i === pickedFix || undefined}
+                onMouseMove={() => i !== pickedFix && setFixAt(i)}
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  commit(f.next)
+                }}
+              >
+                <span className="lqb-sg-ic" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
+                    {FIELD_ICONS[f.icon]}
+                  </svg>
+                </span>
+                <span className="lqb-nf-fix-text">
+                  <span className="lqb-nf-fix-title">{f.title}</span>
+                </span>
+                {i === pickedFix && <kbd className="lqb-key">Enter</kbd>}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    ) : (
+      unknown &&
+      !(shown && sugg) && (
+        <div className="lqb-unknown" role="status">
+          <span>{unknown.regex ? labels.unknownPattern(unknownLabel, unknown.value, unknown.negative, unknown.matches.length > 0) : labels.unknownValue(unknownLabel, unknown.value, unknown.negative, unknown.matches.length > 0)}</span>
+          {unknown.matches.map((v) => (
+            <button type="button" key={v} className="lqb-fix" onClick={() => commit(engine.replaceValue(query, unknown.field, unknown.value, v, unknown.negative))}>
+              {v}
+            </button>
+          ))}
+          {unknown.regex && /^\^[\w.-]+\$?$/.test(unknown.value) && unknown.matches.length > 0 && (
+            <button type="button" className="lqb-fix" onClick={() => commit(engine.replaceValue(query, unknown.field, unknown.value, `${unknownLit}*`, unknown.negative))}>
+              {labels.startingWith(unknownLabel, unknownLit, unknown.negative)}
+            </button>
+          )}
+          {unknown.matches.length > 1 && (
+            <button type="button" className="lqb-fix" onClick={() => commit(engine.replaceValue(query, unknown.field, unknown.value, `*${unknownLit}*`, unknown.negative))}>
+              {labels.containing(unknownLabel, unknownLit, unknown.negative)}
+            </button>
+          )}
+          {dismiss}
+        </div>
+      )
+    ))
 
   const errorBox = analysis.error && (
     <div className="lqb-error" id={errorId} role="alert">
-      <span>{analysis.error}</span>
+      {bar && (
+        <span className="lqb-nf-ic lqb-err-ic" aria-hidden="true">
+          <svg {...ICON} width={14} height={14}>
+            {FIELD_ICONS.error}
+          </svg>
+        </span>
+      )}
+      <span className="lqb-err-text">{analysis.error}</span>
       {analysis.fix != null && interactive && (
         <button type="button" className="lqb-fix" aria-label={labels.useFix(analysis.fix)} onClick={() => commit(analysis.fix as string)}>
           {analysis.fix}
@@ -827,7 +985,15 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
         ]
       : [...paint(query, 'q'), '\u200b']
     const flat = (text: string) => text.replace(/\s+/g, ' ').trim()
-    const pieces = !bad && analysis.parsed.children.length ? analysis.parsed.children.map((n) => flat((n.spans as Span[]).map(([a, b]) => query.slice(a, b)).join(' '))) : [flat(query)]
+    const pieces =
+      stack && !bad && query.includes('\n')
+        ? query
+            .split('\n')
+            .map((l) => flat(l).replace(/,$/, ''))
+            .filter(Boolean)
+        : !bad && analysis.parsed.children.length
+          ? analysis.parsed.children.map((n) => flat((n.spans as Span[]).map(([a, b]) => query.slice(a, b)).join(' ')).replace(/,$/, ''))
+          : [flat(query)]
     const autoName = analysis.parsed.children
       .map((n) => (n.type === 'cond' ? (n.parts ? n.parts.map((p) => p.v).join(', ') : String(n.value)) : engine.chipText(n)))
       .filter(Boolean)
@@ -919,7 +1085,12 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
           <button
             type="button"
             className="lqb-q-main"
-            title={s.query}
+            onMouseEnter={(e) => {
+              const b = e.currentTarget
+              const cut = [...b.querySelectorAll<HTMLElement>('.lqb-q-name, .lqb-q-text')].some((n) => n.scrollWidth > n.clientWidth)
+              if (cut) showTip(b, s.name, s.query.replace(/\s+/g, ' ').trim())
+            }}
+            onMouseLeave={() => setTip(null)}
             onClick={() => {
               setQOpen(false)
               setQText('')
@@ -927,54 +1098,89 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
               onSelectSaved?.(s)
             }}
           >
-            <span className="lqb-q-name">
-              {s.name}
-              {s.pinned && (
-                <svg {...ICON} width={14} height={14} aria-label={labels.pinnedBadge} role="img">
-                  <path d="M9 3h6l-1 6 4 4H6l4-4zM12 13v8" fill="currentColor" />
-                </svg>
-              )}
-            </span>
-            <code>{s.query}</code>
+            <span className="lqb-q-name">{s.name}</span>
+            <code className="lqb-q-query">
+              <svg {...ICON} className="lqb-q-ic" width={12} height={12}>
+                <path d="M3 5h18l-7 8v6l-4 2v-8z" />
+              </svg>
+              <span className="lqb-q-text">{paint(s.query.replace(/\s+/g, ' ').trim(), `q${s.id ?? s.name}`)}</span>
+            </code>
           </button>
-          {interactive && (onPinSaved || onCreateAlert || onEditSaved || onUpdateSaved || onDeleteSaved) && (
-            <span className="lqb-q-acts">
-              {onPinSaved && (
-                <button type="button" className="lqb-icon-btn" aria-label={s.pinned ? labels.unpin(s.name) : labels.pin(s.name)} title={s.pinned ? labels.unpinShort : labels.pinShort} onClick={() => onPinSaved(s, !s.pinned)}>
-                  <svg {...ICON}>
-                    <path d={s.pinned ? 'M9 3h6l-1 6 4 4H6l4-4zM12 13v8M4 4l16 16' : 'M9 3h6l-1 6 4 4H6l4-4zM12 13v8'} />
-                  </svg>
-                </button>
-              )}
-              {onCreateAlert && (
-                <button type="button" className="lqb-icon-btn" aria-label={labels.alertFor(s.name)} title={labels.createAlert} onClick={() => onCreateAlert(s.query, s)}>
-                  <svg {...ICON}>
-                    <path d="M6 16v-5a6 6 0 0 1 12 0v5l2 2H4zM10 21h4" />
-                  </svg>
-                </button>
-              )}
-              {(onEditSaved || onUpdateSaved) && (
-                <button
-                  type="button"
-                  className="lqb-icon-btn"
-                  aria-label={labels.edit(s.name)}
-                  title={labels.editShort}
-                  onClick={() => (onUpdateSaved ? setEditing({ key: s.id ?? s.name, name: s.name, query: s.query, error: '', busy: false }) : onEditSaved?.(s))}
-                >
-                  <svg {...ICON}>
-                    <path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4" />
-                  </svg>
-                </button>
-              )}
-              {onDeleteSaved && (
-                <button type="button" className="lqb-icon-btn lqb-danger" aria-label={labels.remove(s.name)} title={labels.removeShort} onClick={() => setRemoving({ key: s.id ?? s.name, error: '', busy: false })}>
-                  <svg {...ICON}>
-                    <path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" />
-                  </svg>
-                </button>
-              )}
-            </span>
-          )}
+          <span className="lqb-q-end">
+            {s.pinned && (
+              <svg {...ICON} className="lqb-q-pin" width={14} height={14} aria-label={labels.pinnedBadge} role="img">
+                <path d="M9 3h6l-1 6 4 4H6l4-4zM12 13v8" fill="currentColor" />
+              </svg>
+            )}
+            {interactive && (onPinSaved || onCreateAlert || onEditSaved || onUpdateSaved || onDeleteSaved) && (
+              <span className="lqb-q-acts">
+                {onPinSaved && (
+                  <button
+                    type="button"
+                    className="lqb-icon-btn lqb-act-pin"
+                    aria-label={s.pinned ? labels.unpin(s.name) : labels.pin(s.name)}
+                    onMouseEnter={(e) => showTip(e.currentTarget, s.pinned ? labels.unpinShort : labels.pinShort)}
+                    onFocus={(e) => showTip(e.currentTarget, s.pinned ? labels.unpinShort : labels.pinShort)}
+                    onMouseLeave={() => setTip(null)}
+                    onBlur={() => setTip(null)}
+                    onClick={() => onPinSaved(s, !s.pinned)}
+                  >
+                    <svg {...ICON}>
+                      <path d={s.pinned ? 'M9 3h6l-1 6 4 4H6l4-4zM12 13v8M4 4l16 16' : 'M9 3h6l-1 6 4 4H6l4-4zM12 13v8'} />
+                    </svg>
+                  </button>
+                )}
+                {onCreateAlert && (
+                  <button
+                    type="button"
+                    className="lqb-icon-btn lqb-act-alert"
+                    aria-label={labels.alertFor(s.name)}
+                    onMouseEnter={(e) => showTip(e.currentTarget, labels.createAlert)}
+                    onFocus={(e) => showTip(e.currentTarget, labels.createAlert)}
+                    onMouseLeave={() => setTip(null)}
+                    onBlur={() => setTip(null)}
+                    onClick={() => onCreateAlert(s.query, s)}
+                  >
+                    <svg {...ICON}>
+                      <path d="M6 16v-5a6 6 0 0 1 12 0v5l2 2H4zM10 21h4" />
+                    </svg>
+                  </button>
+                )}
+                {(onEditSaved || onUpdateSaved) && (
+                  <button
+                    type="button"
+                    className="lqb-icon-btn lqb-act-edit"
+                    aria-label={labels.edit(s.name)}
+                    onMouseEnter={(e) => showTip(e.currentTarget, labels.editShort)}
+                    onFocus={(e) => showTip(e.currentTarget, labels.editShort)}
+                    onMouseLeave={() => setTip(null)}
+                    onBlur={() => setTip(null)}
+                    onClick={() => (onUpdateSaved ? setEditing({ key: s.id ?? s.name, name: s.name, query: s.query, error: '', busy: false }) : onEditSaved?.(s))}
+                  >
+                    <svg {...ICON}>
+                      <path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4" />
+                    </svg>
+                  </button>
+                )}
+                {onDeleteSaved && (
+                  <button
+                    type="button"
+                    className="lqb-icon-btn lqb-danger"
+                    aria-label={labels.remove(s.name)}
+                    onMouseEnter={(e) => showTip(e.currentTarget, labels.removeShort)}
+                    onFocus={(e) => showTip(e.currentTarget, labels.removeShort)}
+                    onMouseLeave={() => setTip(null)}
+                    onBlur={() => setTip(null)}
+                    onClick={() => setRemoving({ key: s.id ?? s.name, error: '', busy: false })}
+                  >
+                    <svg {...ICON}>
+                      <path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" />
+                    </svg>
+                  </button>
+                )}
+              </span>
+            )}
+          </span>
         </div>
       )
 
@@ -983,109 +1189,127 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
         {blurb !== false && description !== undefined && <p className="lqb-desc">{blurb}</p>}
         <div className="lqb-bar-row">
           <div className="lqb-bar-slot">
-            <div ref={wrapRef} className={['lqb-bar', classNames.bar].filter(Boolean).join(' ')} data-open={expanded || undefined} data-focus={focused || undefined} data-invalid={blocked || undefined}>
-              <div className={['lqb-field', classNames.field].filter(Boolean).join(' ')} onMouseDown={(e) => e.target === e.currentTarget && (keep(e), inputRef.current?.focus())}>
-                <svg {...ICON} className="lqb-funnel">
-                  <path d="M3 5h18l-7 8v6l-4 2v-8z" />
-                </svg>
-                <div className="lqb-edit">
-                  {summarize ? (
-                    <div className="lqb-summary" ref={sumRef} data-overflow={fit.over || undefined} aria-hidden="true">
-                      {pieces.map((p, i) => (
-                        <span key={i} className="lqb-piece">
-                          {i > 0 && <span className="lqb-sep">, </span>}
-                          {bad ? hl : paint(p, `p${i}`)}
-                        </span>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="lqb-hl" ref={hlRef} aria-hidden="true">
-                      {hl}
-                    </div>
-                  )}
-                  {textarea}
-                </div>
-                {summarize && fit.hidden > 0 && !bad && <span className="lqb-more">{labels.hiddenFilters(fit.hidden)}</span>}
-                {query && interactive && (
-                  <span className="lqb-field-acts">
-                    <button
-                      type="button"
-                      className="lqb-icon-btn"
-                      aria-label={labels.clearAria}
-                      title={labels.clear}
-                      onMouseDown={keep}
-                      onClick={() => {
-                        commit('')
-                        inputRef.current?.focus()
-                      }}
-                    >
-                      <svg {...ICON}>
-                        <path d="M6 6l12 12M18 6L6 18" />
-                      </svg>
-                    </button>
-                    {expanded && (
-                      <button type="button" className="lqb-icon-btn" aria-label={labels.copyQuery} title={copied?.index === -1 ? copied.text : labels.copyQuery} onMouseDown={keep} onClick={() => copyBranch(-1, query)}>
+            <div className="lqb-bar-layer">
+              <div ref={wrapRef} className={['lqb-bar', classNames.bar].filter(Boolean).join(' ')} data-open={expanded || undefined} data-focus={focused || undefined} data-invalid={blocked || undefined}>
+                <div className={['lqb-field', classNames.field].filter(Boolean).join(' ')} onMouseDown={(e) => e.target === e.currentTarget && (keep(e), inputRef.current?.focus())}>
+                  <svg {...ICON} className="lqb-funnel">
+                    <path d="M3 5h18l-7 8v6l-4 2v-8z" />
+                  </svg>
+                  <div className="lqb-edit">
+                    {summarize ? (
+                      <div className="lqb-summary" ref={sumRef} data-overflow={fit.over || undefined} aria-hidden="true">
+                        {pieces.map((p, i) => (
+                          <span key={i} className="lqb-piece">
+                            {i > 0 && <span className="lqb-sep">{stack ? ', ' : ' '}</span>}
+                            {bad ? hl : paint(p, `p${i}`)}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="lqb-hl" ref={hlRef} aria-hidden="true">
+                        {hl}
+                      </div>
+                    )}
+                    {textarea}
+                  </div>
+                  {summarize && fit.hidden > 0 && !bad && <span className="lqb-more">{labels.hiddenFilters(fit.hidden)}</span>}
+                  {query && interactive && (
+                    <span className="lqb-field-acts">
+                      <button
+                        type="button"
+                        className="lqb-icon-btn"
+                        aria-label={labels.clearAria}
+                        onMouseEnter={(e) => showTip(e.currentTarget, labels.clear)}
+                        onMouseLeave={() => setTip(null)}
+                        onMouseDown={keep}
+                        onClick={() => {
+                          setTip(null)
+                          commit('')
+                          inputRef.current?.focus()
+                        }}
+                      >
                         <svg {...ICON}>
-                          <rect x="9" y="9" width="11" height="11" rx="2" />
-                          <path d="M5 15V6a2 2 0 0 1 2-2h8" />
+                          <path d="M6 6l12 12M18 6L6 18" />
                         </svg>
                       </button>
-                    )}
-                  </span>
-                )}
-              </div>
-              {showQueries && (
-                <div className="lqb-qside">
-                  <button type="button" ref={qBtnRef} className={['lqb-qbtn', classNames.queriesButton].filter(Boolean).join(' ')} aria-haspopup="dialog" aria-expanded={qOpen} onClick={() => setQOpen((x) => !x)}>
-                    <svg {...ICON}>
-                      <path d="M6 3h12v18l-6-4-6 4z" />
-                    </svg>
-                    <span>{labels.queries}</span>
-                    <span className="lqb-count">{count}</span>
-                    <svg {...ICON} width={15} height={15}>
-                      <path d="M6 9l6 6 6-6" />
-                    </svg>
-                  </button>
-                  {expanded && interactive && (onSave || onSaveQuery || onCreateAlert) && (
-                    <div className="lqb-qside-acts">
-                      {(onSave || onSaveQuery) && (
+                      {expanded && (
                         <button
                           type="button"
-                          ref={saveBtnRef}
-                          className="lqb-side-btn"
-                          aria-expanded={onSaveQuery ? !!draft : undefined}
-                          title={savedMatch ? labels.savedAs(savedMatch.name) : labels.save}
-                          disabled={!query.trim()}
+                          className="lqb-icon-btn"
+                          aria-label={labels.copyQuery}
+                          onMouseEnter={(e) => showTip(e.currentTarget, labels.copyQuery)}
+                          onMouseLeave={() => setTip(null)}
                           onMouseDown={keep}
-                          onClick={() => (onSaveQuery ? setDraft((d) => (d ? null : { name: savedMatch?.name ?? autoName, pinned: savedMatch?.pinned ?? false, error: '', busy: false })) : onSave?.(query, savedMatch))}
+                          onClick={(e) => {
+                            const el = e.currentTarget
+                            copyBranch(-1, query).then((ok) => {
+                              showTip(el, ok ? labels.copied : labels.copyFailed)
+                              setTimeout(() => setTip(null), 1300)
+                            })
+                          }}
                         >
                           <svg {...ICON}>
-                            <path d="M6 3h12v18l-6-4-6 4z" />
+                            <rect x="9" y="9" width="11" height="11" rx="2" />
+                            <path d="M5 15V6a2 2 0 0 1 2-2h8" />
                           </svg>
-                          {labels.saveShort}
                         </button>
                       )}
-                      {onCreateAlert && (
-                        <button type="button" className="lqb-side-btn" disabled={blocked || !query.trim()} onMouseDown={keep} onClick={() => onCreateAlert(query, savedMatch)}>
-                          <svg {...ICON}>
-                            <path d="M6 16v-5a6 6 0 0 1 12 0v5l2 2H4zM10 21h4" />
-                          </svg>
-                          {labels.createAlert}
-                        </button>
-                      )}
-                    </div>
+                    </span>
                   )}
                 </div>
-              )}
-              {suggestions}
-              {liveRegion}
+                {showQueries && (
+                  <div className="lqb-qside">
+                    <button type="button" ref={qBtnRef} className={['lqb-qbtn', classNames.queriesButton].filter(Boolean).join(' ')} aria-haspopup="dialog" aria-expanded={qOpen} onClick={() => setQOpen((x) => !x)}>
+                      <svg {...ICON}>
+                        <path d="M6 3h12v18l-6-4-6 4z" />
+                      </svg>
+                      <span>{labels.queries}</span>
+                      <span className="lqb-count">{count}</span>
+                      <svg {...ICON} width={15} height={15}>
+                        <path d="M6 9l6 6 6-6" />
+                      </svg>
+                    </button>
+                    {expanded && interactive && (onSave || onSaveQuery || onCreateAlert) && (
+                      <div className="lqb-qside-acts">
+                        {(onSave || onSaveQuery) && (
+                          <button
+                            type="button"
+                            ref={saveBtnRef}
+                            className="lqb-side-btn"
+                            aria-expanded={onSaveQuery ? !!draft : undefined}
+                            title={savedMatch ? labels.savedAs(savedMatch.name) : labels.save}
+                            disabled={!query.trim()}
+                            onMouseDown={keep}
+                            onClick={() => (onSaveQuery ? setDraft((d) => (d ? null : { name: savedMatch?.name ?? autoName, pinned: savedMatch?.pinned ?? false, error: '', busy: false })) : onSave?.(query, savedMatch))}
+                          >
+                            <svg {...ICON}>
+                              <path d="M6 3h12v18l-6-4-6 4z" />
+                            </svg>
+                            {labels.saveShort}
+                          </button>
+                        )}
+                        {onCreateAlert && (
+                          <button type="button" className="lqb-side-btn" disabled={blocked || !query.trim()} onMouseDown={keep} onClick={() => onCreateAlert(query, savedMatch)}>
+                            <svg {...ICON}>
+                              <path d="M6 16v-5a6 6 0 0 1 12 0v5l2 2H4zM10 21h4" />
+                            </svg>
+                            {labels.createAlert}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {suggestions}
+                {liveRegion}
+              </div>
+              {errorBox}
+              {unknownBox}
             </div>
           </div>
           {showRun && runButton}
           {actions}
         </div>
-        {errorBox}
-        {unknownBox}
         {(showHelp || showLogql) && (
           <div className="lqb-tools">
             {helpButton}
@@ -1117,7 +1341,10 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
               {labels.pinToTop}
             </label>
             <code className="lqb-pop-preview" title={query}>
-              {flat(query)}
+              <svg {...ICON} className="lqb-q-ic" width={12} height={12}>
+                <path d="M3 5h18l-7 8v6l-4 2v-8z" />
+              </svg>
+              <span className="lqb-q-text">{paint(flat(query), 'sp')}</span>
             </code>
             {draft.error && <div className="lqb-error">{draft.error}</div>}
             <div className="lqb-pop-acts">
@@ -1187,6 +1414,12 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
           </div>
         )}
         {helpDialog}
+        {tip && (
+          <div ref={tipRef} className="lqb-tip" role="tooltip">
+            <div className="lqb-tip-title">{tip.title}</div>
+            {tip.body && <div className="lqb-tip-body">{tip.body}</div>}
+          </div>
+        )}
       </div>
     )
   }

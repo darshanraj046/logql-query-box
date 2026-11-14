@@ -1,6 +1,6 @@
 import { chipText } from './chips'
 import { compile, MAX_BRANCHES } from './compile'
-import { activeValues, appendTerm, clearField, editSpans, facetEdit, termText } from './edit'
+import { activeValues, appendTerm, clearField, editSpans, facetEdit, quoteValue, stackQuery, termText } from './edit'
 import { parse } from './parse'
 import { isRiskyRegex, reEsc, regexError, toJsRegex } from './regex'
 import { defaultSchema, resolveSchema, type ResolvedSchema, type Schema } from './schema'
@@ -35,6 +35,7 @@ export interface Engine {
   toggleValue(query: string, field: string, value: string, negative?: boolean): string
   clearField(query: string, field: string): string
   combine(query: string): string
+  stack(query: string): string
   replaceValue(query: string, field: string, from: string, to: string, negative?: boolean): string
   activeValues(query: string, field: string, negative?: boolean): Set<string>
 }
@@ -112,6 +113,15 @@ export function createEngine(options: EngineOptions = {}): Engine {
           const fix = `${query.slice(0, t.s)}${name} = ${query.slice(next.s)}`
           return blocked(`“${name}” is a field, so it needs an operator, like ${name} = ${query.slice(next.s, next.e).replace(/,+$/, '')}. Without one this searches the log text for the word. To search for the word itself, write "${name}".`, [t.s, t.s + name.length], fix)
         }
+        const names = [...schema.fields.values()].map((f) => f.primary)
+        for (let k = 0; k < toks.length - 1; k++) {
+          const t = toks[k]
+          const next = toks[k + 1]
+          if (t.t !== 'term' || t.field || t.neg || t.kind !== 'word' || next.t !== 'term' || next.field || next.neg || next.kind !== 'word') continue
+          const name = String(t.value)
+          if (!/^[A-Za-z_][A-Za-z0-9_.]*$/.test(name) || schema.alias.has(name.toLowerCase()) || !/^(?:!=|!~|=~|=)/.test(String(next.value))) continue
+          return blocked(`“${name}” is not a field. Use ${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}. To search the log text for “${name}”, write it in quotes.`, [t.s, next.e])
+        }
       }
       const tree = activeExpanded(parsed.root as QueryNode)
       const logql = compileTree(tree)
@@ -140,7 +150,16 @@ export function createEngine(options: EngineOptions = {}): Engine {
           unknownValues.push({ field: n.field, value: p.v, negative: isNegative(n), matches: names.filter((v) => v.toLowerCase().includes(low)).slice(0, 3) })
         }
       }
-      return { query, parsed, error, tree, logql, filter: tree ? toFilter(tree) : null, riskyRegex: !!tree && hasRiskyRegex(tree), unknownValues }
+      let freeText: Analysis['freeText']
+      if (schema.operator === '=' && !schema.freeText) {
+        const t = tokenize(query, schema).toks.find((x) => x.t === 'term' && !x.field && !x.neg && !(x.kind === 'word' && schema.alias.has(String(x.value).toLowerCase())))
+        const line = schema.fields.get(schema.lineField)?.primary
+        if (t && line) {
+          const raw = query.slice(t.s, t.e)
+          freeText = { value: raw, fix: `${query.slice(0, t.s)}${line} = ${raw}${query.slice(t.e)}` }
+        }
+      }
+      return { query, parsed, error, tree, logql, filter: tree ? toFilter(tree) : null, riskyRegex: !!tree && hasRiskyRegex(tree), unknownValues, freeText }
     },
     validate(query) {
       const parsed = parseQuery(query)
@@ -149,17 +168,27 @@ export function createEngine(options: EngineOptions = {}): Engine {
     },
     evaluate: (tree, record) => (tree ? evaluate(tree, record, schema, matchCase) : true),
     highlightPattern(tree) {
-      const sources: string[] = []
+      const sources: { s: string; ci: boolean }[] = []
       const walk = (n: QueryNode): void => {
         if (n.type === 'group') return n.children.forEach(walk)
         if (n.field !== schema.lineField) return
-        if (n.op === 'contains') sources.push(reEsc(valOf(n)))
-        else if (n.op === 'regex' && !isRiskyRegex(valOf(n))) sources.push(toJsRegex(valOf(n), false, false).source)
+        if (n.op === 'contains') sources.push({ s: reEsc(valOf(n)), ci: !matchCase })
+        else if (n.op === 'regex' && !isRiskyRegex(valOf(n))) {
+          const re = toJsRegex(valOf(n), false, false)
+          sources.push({ s: re.source, ci: !matchCase || re.flags.includes('i') })
+        }
       }
       if (tree) walk(tree)
       if (!sources.length) return null
       try {
-        return new RegExp(sources.join('|'), 'giu')
+        if (sources.some((x) => x.ci !== sources[0].ci)) {
+          try {
+            return new RegExp(sources.map((x) => (x.ci ? `(?i:${x.s})` : x.s)).join('|'), 'gu')
+          } catch {
+            return new RegExp(sources.map((x) => x.s).join('|'), 'giu')
+          }
+        }
+        return new RegExp(sources.map((x) => x.s).join('|'), sources[0].ci ? 'giu' : 'gu')
       } catch {
         return null
       }
@@ -186,12 +215,16 @@ export function createEngine(options: EngineOptions = {}): Engine {
         const op = /([A-Za-z_][A-Za-z0-9_.]*)\s*(!=|!~|=~|=)\s*/y
         op.lastIndex = q[t.s] === '-' ? t.s + 1 : t.s
         const m = op.exec(q)
-        if (!m || m[0] === `${m[1]} ${m[2]} `) continue
-        out += `${q.slice(last, m.index)}${m[1]} ${m[2]} `
-        last = m.index + m[0].length
+        if (!m) continue
+        const values = t.parts && schema.operator === '=' ? t.parts.map((p) => (p.wild ? p.v : quoteValue(p.v))).join(', ') : q.slice(m.index + m[0].length, t.e)
+        const text = `${m[1]} ${m[2]} ${values}`
+        if (text === q.slice(m.index, t.e)) continue
+        out += q.slice(last, m.index) + text
+        last = t.e
       }
       return out + q.slice(last)
     },
+    stack: (query) => stackQuery(query, schema),
     replaceValue(query, field, from, to, negative = false) {
       const parsed = parseQuery(query)
       const node = parsed.error ? undefined : (parsed.children.find((n) => n.type === 'cond' && n.field === field && isNegative(n) === negative && (n.parts ? n.parts.some((p) => p.v === from) : valOf(n) === from)) as Cond | undefined)

@@ -10,6 +10,8 @@ export interface FieldDef {
   lowercase?: boolean
   color?: 'level' | 'hash' | 'accent' | ((value: string) => string)
   hint?: string
+  icon?: string
+  valueIcons?: Record<string, string>
   excludeHint?: string
   example?: string | ((values: string[]) => string)
 }
@@ -22,6 +24,7 @@ export interface Schema {
   excludeExample?: string
   parser?: LogParser
   operator?: ':' | '='
+  freeText?: boolean
 }
 
 export interface ResolvedField extends Omit<FieldDef, 'synonyms' | 'groups'> {
@@ -41,6 +44,7 @@ export interface ResolvedSchema {
   excludeExample: string
   parser?: LogParser
   operator: ':' | '='
+  freeText: boolean
   baseSelector: [string, string][]
 }
 
@@ -142,6 +146,7 @@ export function resolveSchema(schema: Schema, baseSelector: Record<string, strin
       ...def,
       name,
       kind,
+      icon: def.icon ?? (schema.operator === '=' ? (kind === 'line' ? 'lines' : 'tag') : undefined),
       primary: names[0],
       synonyms: new Map(Object.entries(def.synonyms ?? {})),
       groups: resolveGroups(name, def.groups)
@@ -167,6 +172,7 @@ export function resolveSchema(schema: Schema, baseSelector: Record<string, strin
     excludeExample: schema.excludeExample ?? (schema.operator === '=' ? `${firstLabel ? firstLabel.primary : 'field'} != value` : `${firstLabel ? firstLabel.primary : 'field'}:value`),
     parser: schema.parser,
     operator: schema.operator ?? ':',
+    freeText: schema.freeText !== false,
     baseSelector: base
   }
 }

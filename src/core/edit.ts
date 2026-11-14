@@ -12,7 +12,7 @@ export function quoteValue(v: string): string {
 export function termText(schema: ResolvedSchema, field: string, parts: ValuePart[], neg: boolean): string {
   const primary = schema.fields.get(field)?.primary ?? field
   const head = schema.operator === '=' ? `${primary}${neg ? ' != ' : ' = '}` : `${neg ? '-' : ''}${primary}:`
-  return `${head}${parts.map((p) => (p.wild ? p.v : quoteValue(p.v))).join(',')}`
+  return `${head}${parts.map((p) => (p.wild ? p.v : quoteValue(p.v))).join(schema.operator === '=' ? ', ' : ',')}`
 }
 
 export function tidy(q: string, schema: ResolvedSchema): string {
@@ -102,4 +102,33 @@ export function clearField(q: string, parsed: ParseResult, schema: ResolvedSchem
   if (parsed.error) return q
   const spans = parsed.children.flatMap((n) => (n.type === 'cond' && n.field === field ? (n.spans as Span[]) : []))
   return spans.length ? editSpans(q, spans, '', schema) : q
+}
+
+export function stackQuery(q: string, schema: ResolvedSchema): string {
+  if (schema.operator !== '=') return q
+  const tk = tokenize(q, schema)
+  if (tk.error) return q
+  const rows: { name: string; op: string; value: string; comma: boolean }[] = []
+  for (let i = 0; i < tk.toks.length; i++) {
+    const t = tk.toks[i]
+    const last = i === tk.toks.length - 1
+    if (t.t === 'term' && t.field && q[t.s] !== '-') {
+      const m = /([A-Za-z_][A-Za-z0-9_.]*)\s*(!=|!~|=~|=)\s*/y
+      m.lastIndex = t.s
+      const hit = m.exec(q)
+      if (!hit) return q
+      rows.push({ name: hit[1], op: hit[2], value: t.parts ? t.parts.map((p) => (p.wild ? p.v : quoteValue(p.v))).join(', ') : q.slice(hit.index + hit[0].length, t.e).trimEnd(), comma: !!t.parts })
+    } else if (last && t.t === 'skip') {
+      const hit = /^([A-Za-z_][A-Za-z0-9_.]*)\s*(!=|!~|=~|=)?\s*$/.exec(q.slice(t.s, t.e))
+      if (!hit || !schema.alias.has(hit[1].toLowerCase())) return q
+      rows.push({ name: hit[1], op: hit[2] ?? '', value: '', comma: false })
+    } else if (last && t.t === 'term' && !t.field && t.kind === 'word' && !t.neg && schema.alias.has(String(t.value).toLowerCase())) {
+      rows.push({ name: String(t.value), op: '', value: '', comma: false })
+    } else {
+      return q
+    }
+  }
+  const width = Math.max(...rows.map((r) => r.name.length))
+  const opWidth = Math.max(...rows.map((r) => r.op.length))
+  return rows.map((r, i) => `${r.name.padEnd(width)} ${r.op ? `${r.op.padEnd(opWidth)} ` : ''}${r.value}${r.comma && rows[i + 1]?.op ? ',' : ''}`).join('\n')
 }

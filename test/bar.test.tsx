@@ -8,10 +8,12 @@ const schema: Schema = {
   parser: 'json',
   operator: '=',
   fields: {
-    logLevel: { label: 'level', aliases: ['level'], values: ['ERROR', 'INFO', 'WARN', 'DEBUG', 'NONE'], example: 'Log level: ERROR, WARN, INFO, DEBUG, NONE' },
-    serviceName: { label: 'app', aliases: ['app'], example: 'App that wrote the log line' },
-    serviceType: { label: 'app.type', aliases: ['app.type'], values: ['JAVA', 'NODE', 'GO', 'PYTHON'], example: 'Runtime: JAVA, NODE, GO, PYTHON' },
-    content: { label: 'content', kind: 'line', parsed: true, aliases: ['content'], example: 'Text in the log line, use * as wildcard' }
+    logLevel: { label: 'level', aliases: ['level'], values: ['ERROR', 'INFO', 'WARN', 'DEBUG', 'NONE'], icon: 'bars', valueIcons: { ERROR: 'error', WARN: 'warn' }, color: (v) => (v === 'ERROR' ? '#b42318' : '#5d697c'), example: 'Severity of the log entry' },
+    serviceName: { label: 'app', aliases: ['app'], example: 'Application that emitted the log entry' },
+    serviceType: { label: 'app.type', aliases: ['app.type'], values: ['JAVA', 'NODE', 'GO', 'PYTHON'], example: 'Type of the application' },
+    content: { label: 'content', kind: 'line', parsed: true, aliases: ['content'], example: 'Log message text. Use * as a wildcard' },
+    traceId: { label: 'traceId', aliases: ['traceId'], icon: 'trace', example: 'ID of the trace associated with the log entry' },
+    spanId: { label: 'spanId', aliases: ['spanId'], icon: 'span', example: 'ID of the span associated with the log entry' }
   }
 }
 
@@ -29,7 +31,7 @@ const queriesButton = () => screen.getByRole('button', { name: /Queries/ })
 function setup(props: LogQLQueryBoxProps = {}) {
   const onExecute = vi.fn()
   const user = userEvent.setup()
-  const view = render(<LogQLQueryBox variant="bar" schema={schema} baseSelector={{ index: 'a' }} saved={SAVED} recentStorageKey={null} onExecute={onExecute} {...props} />)
+  const view = render(<LogQLQueryBox variant="bar" stacked={false} schema={schema} baseSelector={{ index: 'a' }} saved={SAVED} recentStorageKey={null} onExecute={onExecute} {...props} />)
   return { user, onExecute, ...view }
 }
 
@@ -59,7 +61,15 @@ describe('bar variant', () => {
     const { user } = setup()
     await user.click(box())
     const opts = () => screen.getAllByRole('option').map((o) => o.querySelector('code')?.textContent)
-    expect(opts()).toEqual(['level', 'app', 'app.type', 'content'])
+    expect(opts()).toEqual(['level', 'app', 'app.type', 'content', 'traceId', 'spanId'])
+    expect(screen.getAllByRole('option').map((o) => [o.querySelector('code')?.textContent, o.querySelector('.lqb-hint')?.textContent])).toEqual([
+      ['level', 'Severity of the log entry'],
+      ['app', 'Application that emitted the log entry'],
+      ['app.type', 'Type of the application'],
+      ['content', 'Log message text. Use * as a wildcard'],
+      ['traceId', 'ID of the trace associated with the log entry'],
+      ['spanId', 'ID of the span associated with the log entry']
+    ])
     await user.click(screen.getByText('level'))
     expect(box()).toHaveValue('level ')
     expect(screen.getByText('How should level match?')).toBeInTheDocument()
@@ -69,8 +79,8 @@ describe('bar variant', () => {
     expect(opts()).toEqual(['ERROR', 'INFO', 'WARN', 'DEBUG', 'NONE'])
     expect(screen.queryByRole('group', { name: 'Operators' })).toBeNull()
     await user.click(screen.getByText('DEBUG'))
-    expect(box()).toHaveValue('level != DEBUG ')
-    expect(opts()).toEqual(['level', 'app', 'app.type', 'content'])
+    expect(box()).toHaveValue('level != DEBUG')
+    expect(opts()).toEqual(['ERROR', 'INFO', 'WARN', 'NONE'])
   })
 
   it('works from the keyboard alone', async () => {
@@ -81,19 +91,19 @@ describe('bar variant', () => {
     await user.keyboard('{ArrowDown}{Tab}')
     expect(box()).toHaveValue('app.type != ')
     await user.keyboard('{Tab}')
-    expect(box()).toHaveValue('app.type != JAVA ')
+    expect(box()).toHaveValue('app.type != JAVA')
     await user.keyboard('{Escape}{Enter}')
-    expect(onExecute).toHaveBeenLastCalledWith(expect.objectContaining({ query: 'app.type != JAVA ' }))
+    expect(onExecute).toHaveBeenLastCalledWith(expect.objectContaining({ query: 'app.type != JAVA' }))
   })
 
   it('accepts the highlighted value on Enter instead of running a half typed one', async () => {
     const { user, onExecute } = setup({ values: { serviceName: ['apiwiz-api-security', 'pii-detector'] } })
     await user.click(box())
     await user.keyboard('app = apiwiz-api-secu{Enter}')
-    expect(box()).toHaveValue('app = apiwiz-api-security ')
+    expect(box()).toHaveValue('app = apiwiz-api-security')
     expect(onExecute).not.toHaveBeenCalled()
     await user.keyboard('{Escape}{Enter}')
-    expect(onExecute).toHaveBeenLastCalledWith(expect.objectContaining({ query: 'app = apiwiz-api-security ' }))
+    expect(onExecute).toHaveBeenLastCalledWith(expect.objectContaining({ query: 'app = apiwiz-api-security' }))
   })
 
   it('offers every value containing the typed text', async () => {
@@ -102,7 +112,466 @@ describe('bar variant', () => {
     await user.keyboard('app != pii')
     expect(screen.getByText('Every app containing “pii”')).toBeInTheDocument()
     await user.click(screen.getByText('*pii*'))
-    expect(box()).toHaveValue('app != *pii* ')
+    expect(box()).toHaveValue('app != *pii*')
+  })
+
+  it('keeps offering the other values after one is picked', async () => {
+    const { user, onExecute } = setup({ values: { serviceName: ['loans-service', 'accounts-service', 'cards-service'] } })
+    const opts = () => screen.getAllByRole('option').map((o) => o.querySelector('code')?.textContent)
+    await user.click(box())
+    await user.keyboard('app = loans')
+    await user.click(screen.getByText('loans-service'))
+    expect(box()).toHaveValue('app = loans-service')
+    expect(screen.getByText('Add another app')).toBeInTheDocument()
+    expect(opts()).toEqual(['accounts-service', 'cards-service'])
+    await user.click(screen.getByText('accounts-service'))
+    expect(box()).toHaveValue('app = loans-service, accounts-service')
+    expect(opts()).toEqual(['cards-service'])
+    await user.keyboard('{Enter}')
+    expect(box()).toHaveValue('app = loans-service, accounts-service, cards-service')
+    expect(onExecute).not.toHaveBeenCalled()
+    await user.keyboard('{Enter}')
+    expect(onExecute).toHaveBeenCalledTimes(1)
+    expect(onExecute).toHaveBeenLastCalledWith(expect.objectContaining({ query: 'app = loans-service, accounts-service, cards-service' }))
+  })
+
+  it('shows the other values after backspacing onto a finished value', async () => {
+    const { user } = setup({ values: { serviceName: ['loans-service', 'accounts-service'] } })
+    await user.click(box())
+    await user.keyboard('app = loans-service, ')
+    await user.keyboard('{Backspace}{Backspace}')
+    expect(screen.getByText('Add another app')).toBeInTheDocument()
+    expect(screen.getByText('accounts-service')).toBeInTheDocument()
+  })
+
+  it('lets arrow keys pick the next value to add', async () => {
+    const { user, onExecute } = setup({ values: { serviceName: ['loans-service', 'accounts-service', 'cards-service'] } })
+    await user.click(box())
+    await user.keyboard('app = loans-service{ArrowDown}{Enter}')
+    expect(box()).toHaveValue('app = loans-service, cards-service')
+    expect(onExecute).not.toHaveBeenCalled()
+  })
+
+  it('tidies spacing around commas and operators when the box loses focus', async () => {
+    const { user } = setup()
+    await user.click(box())
+    await user.keyboard('app = loans-service,accounts-service, level =WARN')
+    await user.tab()
+    expect(box()).toHaveValue('app = loans-service, accounts-service level = WARN')
+  })
+
+  it('draws the list as a card with icons, a count and key hints', async () => {
+    const { user } = setup({ values: { serviceName: ['loans-service', 'accounts-service', 'cards-service'] } })
+    await user.click(box())
+    const rows = () => screen.getAllByRole('option')
+    expect(document.querySelector('.lqb-sg-keys')).toHaveTextContent('Press Enter to pick a field, then choose a value')
+    expect(document.querySelector('.lqb-sg-keys kbd')).toHaveTextContent('Enter')
+    expect(rows().every((r) => r.querySelector('.lqb-sg-ic svg'))).toBe(true)
+    await user.keyboard('app = ')
+    expect(document.querySelector('.lqb-sg-count')).toHaveTextContent('3 available')
+    expect(rows()[0].querySelector('.lqb-sg-ic')).not.toBeNull()
+    await user.keyboard('loans-service')
+    expect(document.querySelector('.lqb-sg-count')).toHaveTextContent('2 available')
+    expect(rows()[0]).toHaveAttribute('aria-selected', 'true')
+    expect(rows()[0].querySelector('kbd')).toHaveTextContent('Enter')
+    expect(rows()[1].querySelector('kbd')).toBeNull()
+    expect(document.querySelector('.lqb-sg-keys kbd')).toHaveTextContent('Space')
+  })
+
+  it('shows a coloured icon per value and an Enter chip on the highlighted one', async () => {
+    const { user } = setup()
+    await user.click(box())
+    await user.keyboard('level = ')
+    const rows = screen.getAllByRole('option')
+    expect((rows[0].querySelector('.lqb-sg-ic') as HTMLElement).style.color).toBe('rgb(180, 35, 24)')
+    expect(rows[0]).toHaveAttribute('aria-selected', 'true')
+    expect(rows[0].querySelector('kbd')).toHaveTextContent('Enter')
+    expect(rows[1].querySelector('kbd')).toBeNull()
+    expect(document.querySelector('.lqb-sg-keys')).toHaveTextContent('Press Esc to go back to fields')
+  })
+
+  it('goes back to the field list on Escape before a value is typed', async () => {
+    const { user } = setup()
+    await user.click(box())
+    await user.keyboard('level = {Escape}')
+    expect(box()).toHaveValue('')
+    expect(screen.getAllByRole('option').map((o) => o.querySelector('code')?.textContent)).toEqual(['level', 'app', 'app.type', 'content', 'traceId', 'spanId'])
+    await user.keyboard('{Escape}')
+    expect(screen.queryAllByRole('option')).toHaveLength(0)
+  })
+
+  describe('notices under the bar', () => {
+    const banking = { serviceName: ['loans-service', 'accounts-service', 'payments-service', 'cards-service'] }
+    const run = () => screen.getByRole('button', { name: 'Run query' })
+    const note = () => document.querySelector('.lqb-nf') as HTMLElement | null
+    const titles = () => [...(note() as HTMLElement).querySelectorAll('.lqb-nf-fix-title')].map((t) => t.textContent)
+
+    it('floats with the bar, so it never changes the height of the row around it', async () => {
+      const { user, container } = setup({ defaultValue: 'level = INFO app =~ ^accounts$', values: banking })
+      await user.click(run())
+      expect(note()).not.toBeNull()
+      expect(note()?.parentElement).toHaveClass('lqb-bar-layer')
+      expect(container.querySelector('.lqb-v-bar > .lqb-nf')).toBeNull()
+      expect(container.querySelector('.lqb-bar-row > .lqb-nf')).toBeNull()
+    })
+
+    it('explains an exact pattern that matches nothing and lists the fixes', async () => {
+      const { user } = setup({ defaultValue: 'level = INFO app =~ ^accounts$', values: banking })
+      await user.click(run())
+      expect(note()?.querySelector('.lqb-nf-title')).toHaveTextContent('No app matches ^accounts$')
+      expect(note()?.querySelector('.lqb-nf-desc')).toBeNull()
+      expect(titles()).toEqual(['Use “accounts-service”', 'Match every app starting with “accounts”'])
+      expect(note()?.querySelector('.lqb-nf-fix code')).toBeNull()
+      expect(note()?.querySelectorAll('kbd')).toHaveLength(1)
+    })
+
+    it('applies a fix with one click', async () => {
+      const { user, onExecute } = setup({ defaultValue: 'level = INFO app =~ ^accounts$', values: banking })
+      await user.click(run())
+      await user.click(within(note() as HTMLElement).getByText('Use “accounts-service”'))
+      expect(box()).toHaveValue('level = INFO app = accounts-service')
+      expect(onExecute).toHaveBeenLastCalledWith(expect.objectContaining({ query: 'level = INFO app = accounts-service' }))
+      expect(note()).toBeNull()
+    })
+
+    it('keeps the regex and drops the closing anchor for a starts-with match', async () => {
+      const { user } = setup({ defaultValue: 'level = INFO app =~ ^accounts$', values: banking })
+      await user.click(run())
+      await user.click(within(note() as HTMLElement).getByText('Match every app starting with “accounts”'))
+      expect(box()).toHaveValue('level = INFO app =~ ^accounts')
+      expect(note()).toBeNull()
+    })
+
+    it('uses the keyboard: Enter takes the highlighted fix, arrows move, Escape dismisses', async () => {
+      const { user } = setup({ defaultValue: 'level = INFO app =~ ^accounts$', values: banking })
+      await user.click(run())
+      await user.click(box())
+      expect(note()).not.toBeNull()
+      expect(screen.queryByRole('listbox')).toBeNull()
+      await user.keyboard('{ArrowDown}')
+      expect(note()?.querySelectorAll('.lqb-nf-fix')[1]).toHaveAttribute('data-selected')
+      await user.keyboard('{ArrowUp}{ArrowUp}')
+      expect(note()?.querySelectorAll('.lqb-nf-fix')[1]).toHaveAttribute('data-selected')
+      await user.keyboard('{ArrowDown}{Enter}')
+      expect(box()).toHaveValue('level = INFO app = accounts-service')
+      await user.click(box())
+      await user.keyboard('{Control>}a{/Control}app = lonas')
+      await user.click(run())
+      expect(note()).not.toBeNull()
+      await user.click(box())
+      await user.keyboard('{Escape}')
+      expect(note()).toBeNull()
+    })
+
+    it('stays quiet when the pattern matches a real app', async () => {
+      for (const q of ['app =~ accounts', 'app =~ ^accounts', 'app =~ ^accounts-service$', 'app =~ service$', 'app !~ ^cards']) {
+        const { user, unmount } = setup({ defaultValue: q, values: banking })
+        await user.click(run())
+        expect(note(), q).toBeNull()
+        unmount()
+      }
+    })
+
+    it('words the message for an exclusion and an unanchored pattern', async () => {
+      const { user } = setup({ defaultValue: 'app !~ ^zzz', values: banking })
+      await user.click(run())
+      expect(note()?.querySelector('.lqb-nf-desc')).toHaveTextContent('Nothing was excluded.')
+      expect(note()?.querySelectorAll('.lqb-nf-fix')).toHaveLength(0)
+    })
+
+    it('says what is wrong with a plain value and suggests a spelling check', async () => {
+      const { user } = setup({ defaultValue: 'app = zzz', values: { serviceName: ['a'] } })
+      await user.click(run())
+      expect(note()?.querySelector('.lqb-nf-title')).toHaveTextContent('No app is exactly zzz')
+      expect(note()?.querySelector('.lqb-nf-desc')).toHaveTextContent('Nothing matches it. Check the spelling.')
+    })
+
+    it('can be dismissed, and comes back for the next unknown value', async () => {
+      const { user } = setup({ defaultValue: 'app = acounts-service', values: banking })
+      await user.click(run())
+      expect(note()).toHaveTextContent('acounts-service')
+      await user.click(screen.getByRole('button', { name: 'Dismiss' }))
+      expect(note()).toBeNull()
+      await user.click(box())
+      await user.keyboard('{Control>}a{/Control}app = lonas-service')
+      await user.click(run())
+      expect(note()).toHaveTextContent('lonas-service')
+    })
+
+    it('hides while the query is being edited', async () => {
+      const { user } = setup({ defaultValue: 'app = acounts-service', values: banking })
+      await user.click(run())
+      expect(note()).not.toBeNull()
+      await user.click(box())
+      await user.keyboard('x')
+      expect(note()).toBeNull()
+    })
+
+    it('offers a fix for one unknown value in a list and keeps the rest', async () => {
+      const { user } = setup({ defaultValue: 'app = loans-service, accounts', values: banking })
+      await user.click(run())
+      expect(note()?.querySelector('.lqb-nf-title')).toHaveTextContent('No app is exactly accounts')
+      await user.click(within(note() as HTMLElement).getByText('Use “accounts-service”'))
+      expect(box()).toHaveValue('app = loans-service, accounts-service')
+    })
+
+    it('offers containing and starts-with fixes when several apps fit', async () => {
+      const { user } = setup({ defaultValue: 'app = service', values: banking })
+      await user.click(run())
+      expect(titles()).toEqual(['Use “loans-service”', 'Use “accounts-service”', 'Use “payments-service”', 'Match every app containing “service”'].slice(0, 4))
+    })
+
+    it('shows an invalid query under the bar, not in the row', async () => {
+      const { user, container } = setup({ defaultValue: 'level ERROR' })
+      await user.click(run())
+      const err = container.querySelector('.lqb-error') as HTMLElement
+      expect(err).not.toBeNull()
+      expect(err.parentElement).toHaveClass('lqb-bar-layer')
+    })
+  })
+
+  it('moves the highlight to the row under the mouse', async () => {
+    const { user } = setup({ values: { serviceName: ['loans-service', 'accounts-service', 'cards-service'] } })
+    await user.click(box())
+    await user.keyboard('app = ')
+    const rows = () => screen.getAllByRole('option')
+    expect(rows()[0]).toHaveAttribute('aria-selected', 'true')
+    await user.hover(rows()[2])
+    expect(rows()[0]).toHaveAttribute('aria-selected', 'false')
+    expect(rows()[2]).toHaveAttribute('aria-selected', 'true')
+    expect(rows()[2].querySelector('kbd')).toHaveTextContent('Enter')
+    expect(rows()[0].querySelector('kbd')).toBeNull()
+    await user.keyboard('{Enter}')
+    expect(box()).toHaveValue('app = cards-service')
+  })
+
+  it('leaves out values that are already in the query for that field', async () => {
+    const { user } = setup({ defaultValue: 'app = accounts-service level = ERROR', values: { serviceName: ['loans-service', 'accounts-service', 'cards-service'] } })
+    await user.click(box())
+    await user.keyboard(' app = ')
+    expect(screen.getAllByRole('option').map((o) => o.querySelector('code')?.textContent)).toEqual(['loans-service', 'cards-service'])
+    expect(document.querySelector('.lqb-sg-count')).toHaveTextContent('2 available')
+    await user.keyboard('acc')
+    expect(screen.queryAllByRole('option')).toHaveLength(0)
+  })
+
+  describe('stacked layout', () => {
+    const values = { serviceName: ['loans-service', 'accounts-service', 'cards-service'] }
+
+    it('puts one filter on each line with the operators lined up when the query runs', async () => {
+      const { user, onExecute } = setup({ stacked: true, defaultValue: 'app = accounts-service, loans-service level =WARN traceId = abc', values })
+      await user.click(screen.getByRole('button', { name: 'Run query' }))
+      const text = 'app     = accounts-service, loans-service,\nlevel   = WARN,\ntraceId = abc'
+      expect(box()).toHaveValue(text)
+      expect(onExecute).toHaveBeenLastCalledWith(expect.objectContaining({ query: text }))
+      expect(onExecute.mock.calls[0][0].logql.branches[0]).toContain('serviceName=~')
+    })
+
+    it('stacks as you pick fields and values, so the text is the same before and after a run', async () => {
+      const { user } = setup({ stacked: true, values })
+      await user.click(box())
+      await user.keyboard('app = ')
+      await user.click(screen.getByText('accounts-service'))
+      await user.keyboard(' ')
+      await user.click(screen.getByText('level'))
+      expect(box()).toHaveValue('app   = accounts-service\nlevel ')
+      await user.click(screen.getByText('level ='))
+      expect(box()).toHaveValue('app   = accounts-service,\nlevel = ')
+      await user.keyboard('WARN')
+      expect(box()).toHaveValue('app   = accounts-service,\nlevel = WARN')
+      const typed = (box() as HTMLTextAreaElement).value
+      await user.click(screen.getByRole('button', { name: 'Run query' }))
+      expect(box()).toHaveValue(typed)
+    })
+
+    it('shows the closed summary with the same commas', async () => {
+      const { container } = setup({ stacked: true, defaultValue: 'app = accounts-service,\nlevel = WARN' })
+      const summary = container.querySelector('.lqb-summary') as HTMLElement
+      expect([...summary.querySelectorAll('.lqb-piece')].map((p) => p.textContent)).toEqual(['app = accounts-service', ', level = WARN'])
+    })
+
+    it('is on by default in the bar and off in the classic variant', async () => {
+      const { user, unmount } = setup({ stacked: undefined, defaultValue: 'app = a level = WARN' })
+      await user.click(screen.getByRole('button', { name: 'Run query' }))
+      expect(box()).toHaveValue('app   = a,\nlevel = WARN')
+      unmount()
+      const onExecute = vi.fn()
+      render(<LogQLQueryBox variant="classic" schema={schema} baseSelector={{ index: 'a' }} recentStorageKey={null} onExecute={onExecute} defaultValue="app = a level = WARN" />)
+      await userEvent.setup().click(screen.getByRole('combobox'))
+      await userEvent.keyboard('{Escape}{Enter}')
+      expect(screen.getByRole('combobox')).toHaveValue('app = a level = WARN')
+    })
+
+    it('counts one filter per line in the closed summary, even when a value has spaces', () => {
+      const { container } = setup({ stacked: true, defaultValue: 'app = accounts-service,\nlevel = WARN,\ncontent =~ check: active=2 idle=8 w' })
+      const pieces = [...container.querySelectorAll('.lqb-summary .lqb-piece')].map((p) => p.textContent)
+      expect(pieces).toEqual(['app = accounts-service', ', level = WARN', ', content =~ check: active=2 idle=8 w'])
+    })
+
+    it('leaves mixed queries alone', async () => {
+      const { user } = setup({ stacked: true, defaultValue: 'timeout level = WARN' })
+      await user.click(screen.getByRole('button', { name: 'Run query' }))
+      expect(box()).toHaveValue('timeout level = WARN')
+    })
+  })
+
+  it('offers the pattern anchors for the log line and for traceId too', async () => {
+    const { user } = setup()
+    await user.click(box())
+    await user.keyboard('traceId =~ ')
+    expect(screen.getAllByRole('option').map((o) => o.querySelector('code')?.textContent)).toEqual(['^ …', '… $', '^ … $', '… | …', '… .* …', '\\b … \\b', '(?i) …', '\\Q … \\E'])
+    await user.keyboard('{Control>}a{/Control}content =~ ')
+    await user.click(screen.getByText('^ …'))
+    expect(box()).toHaveValue('content =~ ^')
+    expect((box() as HTMLTextAreaElement).selectionStart).toBe(12)
+    expect(document.querySelector('.lqb-sg-note')).toHaveTextContent('Now type the text to find.')
+  })
+
+  it('inserts a combining pattern with the caret where the text goes', async () => {
+    const { user } = setup()
+    await user.click(box())
+    await user.keyboard('app.type =~ ')
+    const groups = [...document.querySelectorAll('[role=group] > .lqb-sg-h')].map((h) => h.textContent)
+    expect(groups).toEqual(['Position', 'Combining text'])
+    await user.click(screen.getByText('\\b … \\b'))
+    expect(box()).toHaveValue('app.type =~ \\b\\b')
+    expect((box() as HTMLTextAreaElement).selectionStart).toBe(14)
+    await user.keyboard('JAVA')
+    expect(box()).toHaveValue('app.type =~ \\bJAVA\\b')
+    expect(document.querySelector('.lqb-sg-note')).toHaveTextContent('Matches 1 of 4: JAVA')
+  })
+
+  it('shows each saved query in a box on one line, with the pin on the right', async () => {
+    const saved: SavedQuery[] = [{ id: '1', name: 'A very long saved query name that should never wrap onto a second line in the panel', query: 'level = ERROR,\napp = pii-detector', pinned: true }]
+    const { user } = setup({ saved, onPinSaved: vi.fn(), onDeleteSaved: vi.fn() })
+    await user.click(queriesButton())
+    const item = document.querySelector('.lqb-q-item') as HTMLElement
+    expect(item.querySelector('.lqb-q-name')).toHaveTextContent('A very long saved query name')
+    expect(item.querySelectorAll('.lqb-q-name svg')).toHaveLength(0)
+    const query = item.querySelector('.lqb-q-query') as HTMLElement
+    expect(query).toHaveTextContent('level = ERROR, app = pii-detector')
+    expect([...query.querySelectorAll('.lqb-hl-f')].map((n) => n.textContent)).toEqual(['level', 'app'])
+    expect(item.querySelector('.lqb-q-end > .lqb-q-pin')).not.toBeNull()
+    expect(item.querySelector('.lqb-q-end > .lqb-q-acts .lqb-act-pin')).not.toBeNull()
+  })
+
+  it('blocks an unknown field name and says which fields exist', async () => {
+    const { user, onExecute } = setup({ defaultValue: 'nnjnd = ncjsndjc' })
+    await user.click(screen.getByRole('button', { name: 'Run query' }))
+    expect(onExecute).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert')).toHaveTextContent('“nnjnd” is not a field. Use level, app, app.type, content, traceId or spanId. To search the log text for “nnjnd”, write it in quotes.')
+    expect(document.querySelector('.lqb-hl-bad')).toHaveTextContent('nnjnd =')
+  })
+
+  describe('bare words with freeText off', () => {
+    const strict = { ...schema, freeText: false }
+
+    it('holds the query and offers a content filter, which Enter applies', async () => {
+      const { user, onExecute } = setup({ schema: strict, defaultValue: 'cscsdcs' })
+      await user.click(screen.getByRole('button', { name: 'Run query' }))
+      expect(onExecute).not.toHaveBeenCalled()
+      const card = document.querySelector('.lqb-nf') as HTMLElement
+      expect(card.querySelector('.lqb-nf-title')).toHaveTextContent('This is not a field cscsdcs')
+      expect(card.querySelector('.lqb-nf-desc')).toBeNull()
+      expect(card.querySelector('.lqb-nf-fix-title')).toHaveTextContent('Search the log text for cscsdcs')
+      await user.click(box())
+      await user.keyboard('{Enter}')
+      expect(box()).toHaveValue('content = cscsdcs')
+      expect(onExecute).toHaveBeenLastCalledWith(expect.objectContaining({ query: 'content = cscsdcs' }))
+    })
+
+    it('shows the card again when Run is pressed after dismissing it', async () => {
+      const { user } = setup({ schema: strict, defaultValue: 'cscsdcs' })
+      await user.click(screen.getByRole('button', { name: 'Run query' }))
+      await user.click(screen.getByRole('button', { name: 'Dismiss' }))
+      expect(document.querySelector('.lqb-nf')).toBeNull()
+      await user.click(screen.getByRole('button', { name: 'Run query' }))
+      expect(document.querySelector('.lqb-nf')).not.toBeNull()
+    })
+
+    it('still runs field filters', async () => {
+      const { user, onExecute } = setup({ schema: strict, defaultValue: 'content = cscsdcs' })
+      await user.click(screen.getByRole('button', { name: 'Run query' }))
+      expect(onExecute).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('tooltips on the bar buttons', () => {
+    it('names the clear and copy buttons with the dark tooltip, not a native title', async () => {
+      const { user } = setup({ defaultValue: 'level = ERROR' })
+      await user.click(box())
+      const clear = screen.getByRole('button', { name: 'Clear the filter' })
+      const copy = screen.getByRole('button', { name: 'Copy query' })
+      expect(clear).not.toHaveAttribute('title')
+      expect(copy).not.toHaveAttribute('title')
+      await user.hover(clear)
+      expect(screen.getByRole('tooltip')).toHaveTextContent('Clear')
+      await user.unhover(clear)
+      expect(screen.queryByRole('tooltip')).toBeNull()
+      await user.hover(copy)
+      expect(screen.getByRole('tooltip')).toHaveTextContent('Copy')
+    })
+
+    it('drops the tooltip when the clear button goes away', async () => {
+      const { user } = setup({ defaultValue: 'level = ERROR' })
+      await user.click(box())
+      await user.hover(screen.getByRole('button', { name: 'Clear the filter' }))
+      await user.click(screen.getByRole('button', { name: 'Clear the filter' }))
+      expect(screen.queryByRole('tooltip')).toBeNull()
+    })
+  })
+
+  describe('saved query tooltips', () => {
+    const saved: SavedQuery[] = [{ id: '1', name: 'A long saved query name', query: 'level = ERROR,\napp = pii-detector' }]
+
+    it('names each action on hover instead of using a native title', async () => {
+      const { user } = setup({ saved, onPinSaved: vi.fn(), onDeleteSaved: vi.fn(), onCreateAlert: vi.fn(), onUpdateSaved: vi.fn() })
+      await user.click(queriesButton())
+      const buttons = [...document.querySelectorAll('.lqb-q-acts .lqb-icon-btn')]
+      expect(buttons.every((b) => !b.hasAttribute('title'))).toBe(true)
+      await user.hover(buttons[0])
+      expect(screen.getByRole('tooltip')).toHaveTextContent('Pin')
+      await user.unhover(buttons[0])
+      expect(screen.queryByRole('tooltip')).toBeNull()
+      await user.hover(buttons[3])
+      expect(screen.getByRole('tooltip')).toHaveTextContent('Delete')
+    })
+
+    it('shows the full name and query when the row is cut off, and stays quiet when it is not', async () => {
+      const { user } = setup({ saved })
+      await user.click(queriesButton())
+      const row = document.querySelector('.lqb-q-main') as HTMLElement
+      await user.hover(row)
+      expect(screen.queryByRole('tooltip')).toBeNull()
+      await user.unhover(row)
+      const wide = vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockReturnValue(500)
+      const narrow = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(100)
+      await user.hover(row)
+      const tip = screen.getByRole('tooltip')
+      expect(tip).toHaveTextContent('A long saved query name')
+      expect(tip).toHaveTextContent('level = ERROR, app = pii-detector')
+      wide.mockRestore()
+      narrow.mockRestore()
+    })
+  })
+
+  it('picks fields and operators with Enter', async () => {
+    const { user } = setup()
+    await user.click(box())
+    await user.keyboard('{Enter}')
+    expect(box()).toHaveValue('level ')
+    await user.keyboard('{Enter}')
+    expect(box()).toHaveValue('level = ')
+  })
+
+  it('asks for the value of a field that has no known values', async () => {
+    const { user } = setup()
+    await user.click(box())
+    await user.keyboard('traceId = ')
+    expect(document.querySelector('.lqb-sg-note')).toHaveTextContent('Type the traceId you want. Use * as a wildcard.')
+    await user.keyboard('abc123')
+    await user.tab()
+    expect(box()).toHaveValue('traceId = abc123')
   })
 
   it('explains what to type where there are no values', async () => {
@@ -112,14 +581,15 @@ describe('bar variant', () => {
     await user.click(screen.getByText('content ='))
     expect(document.querySelector('.lqb-sg-note')).toHaveTextContent(/Use \* as a wildcard/)
     await user.keyboard('{Control>}a{/Control}content =~ ')
-    expect(document.querySelector('.lqb-sg-note')).toHaveTextContent(/regular expression \(RE2\) to find in the log line/)
+    expect(document.querySelector('.lqb-sg-note')).toHaveTextContent(/regular expression, for example timeout\|refused/)
+    expect(screen.getAllByRole('option').map((o) => o.querySelector('code')?.textContent)).toEqual(['^ …', '… $', '^ … $', '… | …', '… .* …', '\\b … \\b', '(?i) …', '\\Q … \\E'])
   })
 
   it('combines repeated filters when the query runs', async () => {
     const { user, onExecute } = setup({ defaultValue: 'app != policy-evaluator app != pii-detector' })
     await user.click(screen.getByRole('button', { name: 'Run query' }))
-    expect(box()).toHaveValue('app != policy-evaluator,pii-detector')
-    expect(onExecute).toHaveBeenLastCalledWith(expect.objectContaining({ query: 'app != policy-evaluator,pii-detector' }))
+    expect(box()).toHaveValue('app != policy-evaluator, pii-detector')
+    expect(onExecute).toHaveBeenLastCalledWith(expect.objectContaining({ query: 'app != policy-evaluator, pii-detector' }))
   })
 
   it('tidies operator spacing when the query runs', async () => {
@@ -133,27 +603,29 @@ describe('bar variant', () => {
     const { user, onExecute } = setup({ defaultValue: 'app != policy-evaluator app != pii', values: { serviceName: ['pii-detector', 'pii-scanner', 'policy-evaluator'] } })
     expect(screen.queryByRole('status')).toBeNull()
     await user.click(screen.getByRole('button', { name: 'Run query' }))
-    const note = screen.getByText(/No app is exactly “pii”, so nothing was excluded\. Did you mean:/).closest('.lqb-unknown') as HTMLElement
-    expect(within(note).getAllByRole('button').map((b) => b.textContent)).toEqual(['pii-detector', 'pii-scanner', 'Every app containing “pii”'])
-    await user.click(within(note).getByText('Every app containing “pii”'))
-    expect(box()).toHaveValue('app != policy-evaluator,*pii*')
-    expect(onExecute).toHaveBeenLastCalledWith(expect.objectContaining({ query: 'app != policy-evaluator,*pii*' }))
-    expect(document.querySelector('.lqb-unknown')).toBeNull()
+    const note = document.querySelector('.lqb-nf') as HTMLElement
+    expect(note.querySelector('.lqb-nf-title')).toHaveTextContent('No app is exactly pii')
+    expect(note.querySelector('.lqb-nf-desc')).toHaveTextContent('Nothing was excluded.')
+    expect([...note.querySelectorAll('.lqb-nf-fix-title')].map((b) => b.textContent)).toEqual(['Use “pii-detector”', 'Use “pii-scanner”', 'Exclude every app containing “pii”'])
+    await user.click(within(note).getByText('Exclude every app containing “pii”'))
+    expect(box()).toHaveValue('app != policy-evaluator, *pii*')
+    expect(onExecute).toHaveBeenLastCalledWith(expect.objectContaining({ query: 'app != policy-evaluator, *pii*' }))
+    expect(document.querySelector('.lqb-nf')).toBeNull()
   })
 
   it('hides the fix prompt while the query is being edited', async () => {
     const { user } = setup({ defaultValue: 'app = zzz', values: { serviceName: ['a'] } })
     await user.click(screen.getByRole('button', { name: 'Run query' }))
-    expect(screen.getByText(/No app is exactly “zzz”, so nothing matches it\. Check the spelling\./)).toBeInTheDocument()
+    expect(document.querySelector('.lqb-nf-desc')).toHaveTextContent('Nothing matches it. Check the spelling.')
     await user.click(box())
     await user.keyboard('z')
-    expect(document.querySelector('.lqb-unknown')).toBeNull()
+    expect(document.querySelector('.lqb-nf')).toBeNull()
   })
 
   it('shows a one line summary with a hidden count while closed', async () => {
     const { user, container } = setup({ defaultValue: 'level = ERROR\napp = apiwiz-api-security content = "a b"' })
     const summary = container.querySelector('.lqb-summary') as HTMLElement
-    expect([...summary.querySelectorAll('.lqb-piece')].map((p) => p.textContent)).toEqual(['level = ERROR', ', app = apiwiz-api-security', ', content = "a b"'])
+    expect([...summary.querySelectorAll('.lqb-piece')].map((p) => p.textContent)).toEqual(['level = ERROR', ' app = apiwiz-api-security', ' content = "a b"'])
     expect([...summary.querySelectorAll('.lqb-hl-f')].map((n) => n.textContent)).toEqual(['level', 'app', 'content'])
     expect(container.querySelector('.lqb-hl')).toBeNull()
     expect(screen.getByRole('button', { name: 'Clear the filter' })).toBeInTheDocument()
@@ -206,7 +678,8 @@ describe('bar variant', () => {
     const name = within(pop).getByRole('textbox', { name: 'Name' })
     expect(name).toHaveValue('ERROR · pii-detector')
     expect(name).toHaveFocus()
-    expect(within(pop).getByText('level = ERROR app = pii-detector')).toBeInTheDocument()
+    expect(pop.querySelector('.lqb-pop-preview')).toHaveTextContent('level = ERROR app = pii-detector')
+    expect([...pop.querySelectorAll('.lqb-pop-preview .lqb-hl-f')].map((n) => n.textContent)).toEqual(['level', 'app'])
     expect(container().querySelector('.lqb-bar')).toHaveAttribute('data-open')
     await user.keyboard('{Control>}a{/Control}PII errors')
     await user.click(within(pop).getByRole('checkbox', { name: 'Pin to the top of Queries' }))
@@ -300,12 +773,12 @@ describe('bar variant', () => {
   it('offers fixes when a pattern matches nothing', async () => {
     const { user, onExecute } = setup({ defaultValue: 'level = INFO app =~ ^passive$', values: { serviceName: ['passive-scan-consumer', 'pii-detector'] } })
     await user.click(screen.getByRole('button', { name: 'Run query' }))
-    const note = document.querySelector('.lqb-unknown') as HTMLElement
-    expect(note).toHaveTextContent('No app matches “^passive$”, so nothing matches it. ^ means starts with and $ means ends with. Did you mean:')
-    expect(within(note).getAllByRole('button').map((b) => b.textContent)).toEqual(['passive-scan-consumer', 'Any app starting with “passive”'])
-    await user.click(within(note).getByText('Any app starting with “passive”'))
-    expect(box()).toHaveValue('level = INFO app = passive*')
-    expect(onExecute).toHaveBeenLastCalledWith(expect.objectContaining({ query: 'level = INFO app = passive*' }))
+    const note = document.querySelector('.lqb-nf') as HTMLElement
+    expect(note.querySelector('.lqb-nf-title')).toHaveTextContent('No app matches ^passive$')
+    expect([...note.querySelectorAll('.lqb-nf-fix-title')].map((b) => b.textContent)).toEqual(['Use “passive-scan-consumer”', 'Match every app starting with “passive”'])
+    await user.click(within(note).getByText('Match every app starting with “passive”'))
+    expect(box()).toHaveValue('level = INFO app =~ ^passive')
+    expect(onExecute).toHaveBeenLastCalledWith(expect.objectContaining({ query: 'level = INFO app =~ ^passive' }))
   })
 
   it('hides value counts when asked', async () => {
@@ -328,7 +801,7 @@ describe('bar variant', () => {
     expect(screen.queryByRole('button', { name: 'Clear the filter' })).toBeNull()
     await user.keyboard('timeout')
     expect(container.querySelector('.lqb-bar')).toHaveAttribute('data-open')
-    expect(container.querySelector('.lqb-bar-slot > .lqb-bar')).not.toBeNull()
+    expect(container.querySelector('.lqb-bar-slot > .lqb-bar-layer > .lqb-bar')).not.toBeNull()
   })
 
   it('shows copy, Save and Create alert only while focused', async () => {

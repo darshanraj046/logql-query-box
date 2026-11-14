@@ -10,6 +10,8 @@ interface FieldDef {
     lowercase?: boolean;
     color?: 'level' | 'hash' | 'accent' | ((value: string) => string);
     hint?: string;
+    icon?: string;
+    valueIcons?: Record<string, string>;
     excludeHint?: string;
     example?: string | ((values: string[]) => string);
 }
@@ -20,6 +22,7 @@ interface Schema {
     excludeExample?: string;
     parser?: LogParser;
     operator?: ':' | '=';
+    freeText?: boolean;
 }
 interface ResolvedField extends Omit<FieldDef, 'synonyms' | 'groups'> {
     name: string;
@@ -37,6 +40,7 @@ interface ResolvedSchema {
     excludeExample: string;
     parser?: LogParser;
     operator: ':' | '=';
+    freeText: boolean;
     baseSelector: [string, string][];
 }
 declare const defaultSchema: Schema;
@@ -113,6 +117,10 @@ interface Analysis {
     filter: ApiFilter | null;
     riskyRegex: boolean;
     unknownValues: UnknownValue[];
+    freeText?: {
+        value: string;
+        fix: string;
+    };
 }
 interface UnknownValue {
     field: string;
@@ -138,6 +146,8 @@ interface Suggestion {
     keep?: boolean;
     caret?: number;
     whole?: string;
+    icon?: string;
+    iconColor?: string;
 }
 interface SuggestionList {
     head: string;
@@ -148,6 +158,9 @@ interface SuggestionList {
     note?: string;
     search?: string;
     more?: number;
+    count?: number;
+    finished?: boolean;
+    back?: [number, number];
 }
 interface SuggestExtras {
     saved?: SavedQuery[];
@@ -186,6 +199,7 @@ interface Engine {
     toggleValue(query: string, field: string, value: string, negative?: boolean): string;
     clearField(query: string, field: string): string;
     combine(query: string): string;
+    stack(query: string): string;
     replaceValue(query: string, field: string, from: string, to: string, negative?: boolean): string;
     activeValues(query: string, field: string, negative?: boolean): Set<string>;
 }

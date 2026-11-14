@@ -29,6 +29,17 @@ export interface Labels {
   suggestionCount: (count: number) => string
   loadingValues: string
   moreValues: (count: number) => string
+  available: (count: number) => string
+  dismiss: string
+  notFoundTitle: (label: string, regex: boolean) => string
+  notFoundBody: (label: string, value: string, regex: boolean, negative: boolean, hasMatches: boolean) => string
+  didYouMean: string
+  notFieldTitle: string
+  notFieldBody: string
+  fixSearchText: (value: string) => string
+  fixUse: (value: string) => string
+  fixStarting: (label: string, value: string, negative: boolean) => string
+  fixContaining: (label: string, value: string, negative: boolean) => string
   useFix: (query: string) => string
   savedAndRecent: string
   filterPlaceholder: string
@@ -101,6 +112,20 @@ export const defaultLabels: Labels = {
   loadingValues: 'Loading values…',
   useFix: (query) => `Change the filter to ${query} and run it`,
   moreValues: (count) => `${count.toLocaleString('en-US')} more. Keep typing to narrow the list.`,
+  available: (count) => `${count.toLocaleString('en-US')} available`,
+  dismiss: 'Dismiss',
+  notFoundTitle: (label, regex) => (regex ? `No ${label} matches` : `No ${label} is exactly`),
+  notFoundBody: (_label, value, regex, negative, hasMatches) => {
+    if (regex) return /^\^[\w.-]+\$$/.test(value) ? '' : `${negative ? 'Nothing was excluded' : 'Nothing matches it'}.`
+    return `${negative ? 'Nothing was excluded' : 'Nothing matches it'}.${hasMatches ? '' : ' Check the spelling.'}`
+  },
+  didYouMean: 'Did you mean',
+  notFieldTitle: 'This is not a field',
+  notFieldBody: '',
+  fixSearchText: (value) => `Search the log text for ${value}`,
+  fixUse: (value) => `Use “${value}”`,
+  fixStarting: (label, value, negative) => `${negative ? 'Exclude' : 'Match'} every ${label} starting with “${value}”`,
+  fixContaining: (label, value, negative) => `${negative ? 'Exclude' : 'Match'} every ${label} containing “${value}”`,
   savedAndRecent: 'Saved and recent',
   filterPlaceholder: 'Type to filter',
   queries: 'Queries',

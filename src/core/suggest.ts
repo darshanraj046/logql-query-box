@@ -18,7 +18,7 @@ function hue(s: string): number {
 
 function colorOf(f: ResolvedField, v: string): string {
   if (typeof f.color === 'function') return f.color(v)
-  if (f.color === 'level') return `var(--lqb-lv-${v}, var(--lqb-faint))`
+  if (f.color === 'level') return `var(--lqb-lv-${v.toLowerCase()}, var(--lqb-faint))`
   if (f.color === 'hash') return `hsl(${hue(v)} 55% 55%)`
   return 'var(--lqb-accent)'
 }
@@ -95,14 +95,14 @@ export function suggest(src: string, caret: number, schema: ResolvedSchema, know
               ['!~', 'Does not contain the text or match the pattern']
             ]
       for (const [o, hint] of choices) items.push({ kind: 'operator', label: `${lead.value} ${o}`, hint, replace: [lead.s, caret], text: `${src.slice(lead.s, lead.e)} ${o} `, keep: true })
-      return { head: `How should ${f.label} match?`, items, extra: [] }
+      return { head: `How should ${f.label} match?`, items, extra: [], note: 'Press [Enter] to choose how it matches' }
     }
   }
 
   if (text === '-') {
     for (const f of labelFields(schema)) {
       const label = `-${f.primary}:`
-      items.push({ kind: 'field', label, hint: f.excludeHint ?? `Hide ${f.label}`, replace, text: label, keep: true })
+      items.push({ kind: 'field', label, hint: f.excludeHint ?? `Hide ${f.label}`, replace, text: label, keep: true, icon: f.icon })
     }
     return { head: 'Exclude (NOT). You can also type -word to hide lines containing it', items, extra: [] }
   }
@@ -113,19 +113,28 @@ export function suggest(src: string, caret: number, schema: ResolvedSchema, know
   const op = m ? m[2].trim() : ''
   const regexOp = op === '=~' || op === '!~'
   const isLine = name === schema.lineField
-  if (eq && m && name && regexOp && !isLine) {
+  if (eq && m && name && regexOp) {
     const field = schema.fields.get(name) as ResolvedField
     const head = `${neg}${m[1]}${m[2]}`
     if (!m[3]) {
       const anchors: [string, string, number][] = [
-        ['^', `Starts with the text you type next`, 1],
-        ['$', `Ends with the text you type next`, 0],
-        ['^$', `Is exactly the text you type next`, 1]
+        ['^', `${isLine ? 'Line starts' : 'Starts'} with the text you type next`, 1],
+        ['$', `${isLine ? 'Line ends' : 'Ends'} with the text you type next`, 0],
+        ['^$', `${isLine ? 'Line is' : 'Is'} exactly the text you type next`, 1]
       ]
       for (const [a, hint, at] of anchors) items.push({ kind: 'operator', label: a === '^$' ? '^ … $' : a === '^' ? '^ …' : '… $', hint, replace, text: head + a, caret: head.length + at, keep: true })
-      return { head: 'Pattern', items, extra: [], note: `Or just type some text to match any ${field.label} that contains it.` }
+      const combine: [string, string, string, number][] = [
+        ['… | …', 'Contains either one, for example timeout|refused', '|', 0],
+        ['… .* …', 'Contains both, in that order', '.*', 0],
+        ['\\b … \\b', 'Contains it as a whole word, so error does not match errors', '\\b\\b', 2],
+        ['(?i) …', 'Ignores upper and lower case', '(?i)', 4],
+        ['\\Q … \\E', 'Reads what you type as plain text, so . [ ( are not special', '\\Q\\E', 2]
+      ]
+      const extra: Suggestion[] = combine.map(([label, hint, text, at]) => ({ kind: 'operator', label, hint, replace, text: head + text, caret: head.length + at, keep: true }))
+      return { head: 'Position', items, extra, extraHead: 'Combining text', note: isLine ? 'Or just type a regular expression, for example timeout|refused.' : `Or just type some text to match any ${field.label} that contains it.` }
     }
-    if (!m[3].replace(/^\^/, '').replace(/\$$/, '')) return { head: '', items: [], extra: [], note: `Now type the ${field.label} text.` }
+    if (!m[3].replace(/^\^/, '').replace(/\$$/, '')) return { head: '', items: [], extra: [], note: `Now type the ${isLine ? 'text to find' : `${field.label} text`}.` }
+    if (isLine) return { head: '', items: [], extra: [] }
     const names = valueNames(field, known)
     if (!names.length) return NOTHING
     let hits: string[] = []
@@ -143,31 +152,70 @@ export function suggest(src: string, caret: number, schema: ResolvedSchema, know
     const note = !regexOp
       ? 'Type text to find in the log line. Use * as a wildcard and "quotes" for an exact phrase.'
       : isLine
-        ? 'Type a regular expression (RE2) to find in the log line, for example timeout|refused.'
-        : 'Type a regular expression (RE2) found anywhere in the value, for example security. Use ^ and $ to anchor it, like ^checkout-'
+        ? 'Type a regular expression to find in the log line, for example timeout|refused.'
+        : 'Type a regular expression found anywhere in the value, for example security. Use ^ and $ to anchor it, like ^checkout-'
     return { head: '', items: [], extra: [], note: m[3] ? undefined : note }
   }
   if (m && name && name !== schema.lineField) {
     const field = schema.fields.get(name) as ResolvedField
     const rest = m[3]
     const lc = rest.lastIndexOf(',')
-    const prior = lc >= 0 ? rest.slice(0, lc + 1) : ''
-    const part = (lc >= 0 ? rest.slice(lc + 1) : rest).toLowerCase()
+    const part = (lc >= 0 ? rest.slice(lc + 1) : rest).trim().toLowerCase()
     const parts = tk.token?.parts ?? []
-    const chosen = new Set((rest.endsWith(',') ? parts : parts.slice(0, -1)).map((p) => p.v.toLowerCase()))
-    const all = valueOptions(field, known).filter((o) => !chosen.has(o.v.toLowerCase()))
+    const trailing = rest.endsWith(',')
+    const last = trailing ? undefined : parts[parts.length - 1]
+    const options = valueOptions(field, known)
+    const lastLow = last && !last.wild ? last.v.toLowerCase() : ''
+    const finished = eq && !!lastLow && options.some((o) => o.v.toLowerCase() === lastLow) && !options.some((o) => o.v.toLowerCase() !== lastLow && o.v.toLowerCase().includes(lastLow))
+    const kept = trailing || finished ? parts : parts.slice(0, -1)
+    const chosen = new Set(kept.map((p) => p.v.toLowerCase()))
+    for (const t of tokenize(src, schema).toks) if (t.t === 'term' && t.field === name && t.s !== tk.s) t.parts?.forEach((p) => chosen.add(p.v.toLowerCase()))
+    const all = options.filter((o) => !chosen.has(o.v.toLowerCase()))
     const pre = all.filter((o) => !part || o.v.toLowerCase().indexOf(part) === 0)
-    const hits = eq && part ? [...pre, ...all.filter((o) => o.v.toLowerCase().indexOf(part) > 0)] : pre.length ? pre : all.filter((o) => o.v.toLowerCase().indexOf(part) >= 0)
+    const hits = finished ? all : eq && part ? [...pre, ...all.filter((o) => o.v.toLowerCase().indexOf(part) > 0)] : pre.length ? pre : all.filter((o) => o.v.toLowerCase().indexOf(part) >= 0)
     const counted = all.some((o) => o.n !== undefined)
     const cap = extras.limit && extras.limit > 0 ? extras.limit : hits.length
+    const lead = eq ? `${neg}${m[1]} ${op} ` : `${neg}${m[1]}${m[2]}`
+    const prior = eq ? kept.map((p) => `${p.wild ? p.v : quoteValue(p.v)}, `).join('') : lc >= 0 ? rest.slice(0, lc + 1) : ''
     for (const o of hits.slice(0, cap)) {
-      items.push({ kind: 'value', label: o.v, hint: counted ? `${(o.n ?? 0).toLocaleString('en-US')} lines` : '', color: colorOf(field, o.v), replace, text: `${neg}${m[1]}${m[2]}${prior}${quoteValue(o.v)} `, keep: eq || undefined })
+      items.push({
+        kind: 'value',
+        label: o.v,
+        hint: counted ? `${(o.n ?? 0).toLocaleString('en-US')} lines` : '',
+        color: colorOf(field, o.v),
+        replace,
+        text: `${lead}${prior}${quoteValue(o.v)}${eq ? '' : ' '}`,
+        keep: eq || undefined,
+        icon: field.valueIcons?.[o.v] ?? field.icon,
+        iconColor: field.valueIcons?.[o.v] ? colorOf(field, o.v) : undefined
+      })
     }
     const typed = (lc >= 0 ? rest.slice(lc + 1) : rest).trim()
-    if (eq && typed.length > 1 && !typed.includes('*') && !all.some((o) => o.v.toLowerCase() === part) && hits.some((o) => o.v.toLowerCase().includes(part))) {
-      items.push({ kind: 'value', label: `*${typed}*`, sub: `${op === '!=' ? 'Every' : 'Any'} ${field.label} containing “${typed}”`, replace, text: `${neg}${m[1]}${m[2]}${prior}*${typed}* `, keep: true })
+    if (eq && !finished && typed.length > 1 && !typed.includes('*') && !all.some((o) => o.v.toLowerCase() === part) && hits.some((o) => o.v.toLowerCase().includes(part))) {
+      items.push({ kind: 'value', label: `*${typed}*`, sub: `${op === '!=' ? 'Every' : 'Any'} ${field.label} containing “${typed}”`, replace, text: `${lead}${prior}*${typed}*`, keep: true, icon: field.icon })
     }
-    return { head: `Values for ${field.label}`, field: name, items, extra: [], search: typed, more: hits.length > cap ? hits.length - cap : undefined }
+    return {
+      head: finished ? `Add another ${field.label}` : `Values for ${field.label}`,
+      field: name,
+      items,
+      extra: [],
+      search: finished ? '' : typed,
+      more: hits.length > cap ? hits.length - cap : undefined,
+      count: eq && items.length ? hits.length : undefined,
+      finished: finished || undefined,
+      back: eq && !typed && !kept.length ? replace : undefined,
+      note: !eq
+        ? undefined
+        : !options.length
+          ? `Type the ${field.label} you want. Use * as a wildcard.`
+          : !items.length
+            ? undefined
+            : finished
+              ? 'Press [Space] to filter by another field'
+              : !typed && !kept.length
+                ? 'Press [Esc] to go back to fields'
+                : 'Press [Enter] to pick a value, or [,] to add another'
+    }
   }
 
   if (body) {
@@ -175,24 +223,23 @@ export function suggest(src: string, caret: number, schema: ResolvedSchema, know
     for (const f of labelFields(schema)) {
       const label = `${f.primary}${sep}`
       if (label.toLowerCase().indexOf(low) === 0 && (eq || label.toLowerCase() !== low)) {
-        items.push({ kind: 'field', label: neg + label.trimEnd(), hint: f.hint ?? `Filter by ${f.label}`, replace, text: neg + label, keep: true })
+        items.push({ kind: 'field', label: neg + label.trimEnd(), hint: f.hint ?? `Filter by ${f.label}`, replace, text: neg + label, keep: true, icon: f.icon })
       }
     }
     if (eq && schema.fields.get(schema.lineField)?.aliases?.some((a) => a.toLowerCase().indexOf(low) === 0)) {
       const f = schema.fields.get(schema.lineField) as ResolvedField
-      items.push({ kind: 'field', label: f.primary, hint: exampleOf(f, known), replace, text: `${neg}${f.primary} `, keep: true })
+      items.push({ kind: 'field', label: f.primary, hint: exampleOf(f, known), replace, text: `${neg}${f.primary} `, keep: true, icon: f.icon })
     }
-    return { head: items.length ? 'Fields' : '', items, extra: [] }
+    return { head: items.length ? 'Fields' : '', items, extra: [], note: eq && items.length ? 'Press [Enter] to pick a field, then choose a value' : undefined }
   }
 
-  for (const f of labelFields(schema)) {
+  for (const f of eq ? [...schema.fields.values()] : labelFields(schema)) {
+    if (f.name === schema.lineField && !f.aliases?.length) continue
     const label = `${f.primary}${sep}`
-    items.push({ kind: 'field', label: label.trimEnd(), hint: exampleOf(f, known), replace, text: label, keep: true })
+    items.push({ kind: 'field', label: label.trimEnd(), hint: exampleOf(f, known), replace, text: label, keep: true, icon: f.icon })
   }
   if (eq) {
-    const f = schema.fields.get(schema.lineField) as ResolvedField
-    if (f.aliases?.length) items.push({ kind: 'field', label: f.primary, hint: exampleOf(f, known), replace, text: `${f.primary} `, keep: true })
-    return { head: 'Fields', items, extra: [] }
+    return { head: 'Fields', items, extra: [], note: 'Press [Enter] to pick a field, then choose a value' }
   }
   items.push({ kind: 'field', label: '-', hint: `Exclude, for example -${schema.excludeExample}`, replace, text: '-', keep: true })
   const extra: Suggestion[] = []
