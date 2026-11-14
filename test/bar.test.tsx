@@ -97,13 +97,13 @@ describe('bar variant', () => {
   })
 
   it('accepts the highlighted value on Enter instead of running a half typed one', async () => {
-    const { user, onExecute } = setup({ values: { serviceName: ['apiwiz-api-security', 'pii-detector'] } })
+    const { user, onExecute } = setup({ values: { serviceName: ['gateway-api-security', 'pii-detector'] } })
     await user.click(box())
-    await user.keyboard('app = apiwiz-api-secu{Enter}')
-    expect(box()).toHaveValue('app = apiwiz-api-security')
+    await user.keyboard('app = gateway-api-secu{Enter}')
+    expect(box()).toHaveValue('app = gateway-api-security')
     expect(onExecute).not.toHaveBeenCalled()
     await user.keyboard('{Escape}{Enter}')
-    expect(onExecute).toHaveBeenLastCalledWith(expect.objectContaining({ query: 'app = apiwiz-api-security' }))
+    expect(onExecute).toHaveBeenLastCalledWith(expect.objectContaining({ query: 'app = gateway-api-security' }))
   })
 
   it('offers every value containing the typed text', async () => {
@@ -623,9 +623,9 @@ describe('bar variant', () => {
   })
 
   it('shows a one line summary with a hidden count while closed', async () => {
-    const { user, container } = setup({ defaultValue: 'level = ERROR\napp = apiwiz-api-security content = "a b"' })
+    const { user, container } = setup({ defaultValue: 'level = ERROR\napp = gateway-api-security content = "a b"' })
     const summary = container.querySelector('.lqb-summary') as HTMLElement
-    expect([...summary.querySelectorAll('.lqb-piece')].map((p) => p.textContent)).toEqual(['level = ERROR', ' app = apiwiz-api-security', ' content = "a b"'])
+    expect([...summary.querySelectorAll('.lqb-piece')].map((p) => p.textContent)).toEqual(['level = ERROR', ' app = gateway-api-security', ' content = "a b"'])
     expect([...summary.querySelectorAll('.lqb-hl-f')].map((n) => n.textContent)).toEqual(['level', 'app', 'content'])
     expect(container.querySelector('.lqb-hl')).toBeNull()
     expect(screen.getByRole('button', { name: 'Clear the filter' })).toBeInTheDocument()

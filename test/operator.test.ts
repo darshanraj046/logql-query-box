@@ -109,24 +109,24 @@ describe('operator "="', () => {
   })
 
   it('offers a contains row when the typed text is not an exact value', () => {
-    const apps = createEngine({ schema, values: { serviceName: ['pii-detector', 'policy-evaluator', 'security-notifier', 'apiwiz-api-security'] }, baseSelector: { index: 'a' } })
+    const apps = createEngine({ schema, values: { serviceName: ['pii-detector', 'policy-evaluator', 'security-notifier', 'gateway-api-security'] }, baseSelector: { index: 'a' } })
     const s = apps.suggest('app != pii', 10)
     expect(s.items.map((i) => [i.label, i.text, i.sub])).toEqual([
       ['pii-detector', 'app != pii-detector', undefined],
       ['*pii*', 'app != *pii*', 'Every app containing “pii”']
     ])
-    expect(apps.suggest('app = secur', 11).items.map((i) => i.label)).toEqual(['security-notifier', 'apiwiz-api-security', '*secur*'])
-    expect(apps.suggest('app = security', 14).items.map((i) => i.label)).toEqual(['security-notifier', 'apiwiz-api-security', '*security*'])
+    expect(apps.suggest('app = secur', 11).items.map((i) => i.label)).toEqual(['security-notifier', 'gateway-api-security', '*secur*'])
+    expect(apps.suggest('app = security', 14).items.map((i) => i.label)).toEqual(['security-notifier', 'gateway-api-security', '*security*'])
     const more = apps.suggest('app = pii-detector', 18)
     expect(more.head).toBe('Add another app')
     expect(more.items.map((i) => [i.label, i.text])).toEqual([
       ['policy-evaluator', 'app = pii-detector, policy-evaluator'],
       ['security-notifier', 'app = pii-detector, security-notifier'],
-      ['apiwiz-api-security', 'app = pii-detector, apiwiz-api-security']
+      ['gateway-api-security', 'app = pii-detector, gateway-api-security']
     ])
-    expect(apps.suggest('app = pii-detector, policy-evaluator', 35).items.map((i) => i.text)).toEqual(['app = pii-detector, policy-evaluator, security-notifier', 'app = pii-detector, policy-evaluator, apiwiz-api-security'])
+    expect(apps.suggest('app = pii-detector, policy-evaluator', 35).items.map((i) => i.text)).toEqual(['app = pii-detector, policy-evaluator, security-notifier', 'app = pii-detector, policy-evaluator, gateway-api-security'])
     expect(apps.suggest('app = pii-detector, po', 22).items.map((i) => [i.label, i.text])).toEqual([['policy-evaluator', 'app = pii-detector, policy-evaluator'], ['*po*', 'app = pii-detector, *po*']])
-    expect(apps.suggest('app = pii-detector,', 19).items.map((i) => i.text)).toEqual(['app = pii-detector, policy-evaluator', 'app = pii-detector, security-notifier', 'app = pii-detector, apiwiz-api-security'])
+    expect(apps.suggest('app = pii-detector,', 19).items.map((i) => i.text)).toEqual(['app = pii-detector, policy-evaluator', 'app = pii-detector, security-notifier', 'app = pii-detector, gateway-api-security'])
     expect(apps.suggest('app=pii-detector', 16).items[0].text).toBe('app = pii-detector, policy-evaluator')
     expect(apps.suggest('app = pii', 9).head).toBe('Values for app')
     expect(apps.suggest('app = zzz', 9).items).toEqual([])
@@ -185,9 +185,9 @@ describe('operator "="', () => {
   })
 
   it('previews which known values a pattern matches while typing', () => {
-    const apps = createEngine({ schema, values: { serviceName: ['passive-scan-consumer', 'pii-detector', 'policy-evaluator', 'security-notifier', 'apiwiz-api-security'] }, baseSelector: { index: 'a' } })
+    const apps = createEngine({ schema, values: { serviceName: ['passive-scan-consumer', 'pii-detector', 'policy-evaluator', 'security-notifier', 'gateway-api-security'] }, baseSelector: { index: 'a' } })
     expect(apps.suggest('app =~ ^p', 9).note).toBe('Matches 3 of 5: passive-scan-consumer, pii-detector, policy-evaluator')
-    expect(apps.suggest('app =~ security', 15).note).toBe('Matches 2 of 5: security-notifier, apiwiz-api-security')
+    expect(apps.suggest('app =~ security', 15).note).toBe('Matches 2 of 5: security-notifier, gateway-api-security')
     expect(apps.suggest('app =~ ^passive$', 16).note).toMatch(/^Matches no app\. \^ means starts with/)
     expect(apps.suggest('app =~ ^$', 8).note).toBe('Now type the app text.')
     expect(apps.suggest('app =~ (', 8).note).toBe('This is not a complete pattern yet.')
@@ -305,15 +305,15 @@ describe('operator "="', () => {
   })
 
   it('matches a field regex anywhere in the value, with anchors when asked', () => {
-    const rows = ['apiwiz-api-security', 'security-notifier', 'policy-evaluator'].map((serviceName) => ({ serviceName }))
+    const rows = ['gateway-api-security', 'security-notifier', 'policy-evaluator'].map((serviceName) => ({ serviceName }))
     const hits = (q: string) => rows.filter((r) => e.evaluate(e.analyze(q).tree, r)).map((r) => r.serviceName)
-    expect(hits('app =~ security')).toEqual(['apiwiz-api-security', 'security-notifier'])
+    expect(hits('app =~ security')).toEqual(['gateway-api-security', 'security-notifier'])
     expect(hits('app =~ ^security')).toEqual(['security-notifier'])
-    expect(hits('app =~ security$')).toEqual(['apiwiz-api-security'])
+    expect(hits('app =~ security$')).toEqual(['gateway-api-security'])
     expect(hits('app !~ security')).toEqual(['policy-evaluator'])
     expect(hits('app = /eval/')).toEqual(['policy-evaluator'])
     expect(hits('app = policy-*')).toEqual(['policy-evaluator'])
-    expect(hits('app = *security')).toEqual(['apiwiz-api-security'])
+    expect(hits('app = *security')).toEqual(['gateway-api-security'])
     expect(e.analyze('app =~ security').logql.branches).toEqual(['{index="a"}\n  | json serviceName | __error__=""\n  | serviceName=~"^(?s:.*)(?:security)(?s:.*)$"'])
   })
 

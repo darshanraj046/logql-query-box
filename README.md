@@ -383,15 +383,15 @@ The panel lists pinned queries first, then the rest, in the order you pass them.
 
 ### Complete example with a REST backend
 
-A copy-paste page: the bar, saved queries over REST, results, and highlighting. The endpoints follow the APIWiz logger API (`/v1/api-logger/application-log`). Change `API`, the headers and the paths to match yours.
+A copy-paste page: the bar, saved queries over REST, results, and highlighting. The endpoints are an example REST API (`/api/logs`). Change `API`, the headers and the paths to match yours.
 
 ```tsx
 import { createEngine, LogQLQueryBox, type Analysis, type SavedQuery, type Schema } from 'logql-query-box'
 import 'logql-query-box/styles.css'
 import { useEffect, useMemo, useState } from 'react'
 
-const API = '/v1/api-logger/application-log'
-const headers = () => ({ 'Content-Type': 'application/json', jsessionId: sessionStorage.getItem('jsessionId') ?? '' })
+const API = '/api/logs'
+const headers = () => ({ 'Content-Type': 'application/json', Authorization: `Bearer ${sessionStorage.getItem('token') ?? ''}` })
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${API}${path}`, { method, headers: headers(), body: body === undefined ? undefined : JSON.stringify(body) })
