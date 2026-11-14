@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.1
+
+Changed:
+
+- The README and the tests use generic example names, paths and headers. No code change from 0.6.0.
+
 ## 0.6.0
 
 Upgrading from 0.5.x:
