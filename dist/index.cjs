@@ -559,7 +559,7 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
   const expanded = bar && (focused || !!draft) && !qOpen && !!query;
   const showTip = (el, title, body) => {
     const r = el.getBoundingClientRect();
-    setTip({ title, body, x: r.left + r.width / 2, y: r.bottom + 6 });
+    setTip({ title, body, x: r.left + r.width / 2, y: r.bottom + 6, el });
   };
   useIsoLayoutEffect(() => {
     const el = tipRef.current;
@@ -575,6 +575,9 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
   (0, import_react2.useEffect)(() => {
     if (!qOpen) setTip(null);
   }, [qOpen]);
+  (0, import_react2.useEffect)(() => {
+    if (tip && !tip.el.isConnected) setTip(null);
+  });
   (0, import_react2.useEffect)(() => {
     if (qOpen) return;
     setEditing(null);
@@ -1037,7 +1040,8 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
       "\u200B"
     ] : [...paint(query, "q"), "\u200B"];
     const flat = (text) => text.replace(/\s+/g, " ").trim();
-    const pieces = stack && !bad && query.includes("\n") ? query.split("\n").map((l) => flat(l).replace(/,$/, "")).filter(Boolean) : !bad && analysis.parsed.children.length ? analysis.parsed.children.map((n) => flat(n.spans.map(([a, b]) => query.slice(a, b)).join(" ")).replace(/,$/, "")) : [flat(query)];
+    const raw = stack && !bad && query.includes("\n") ? query.split("\n").map(flat).filter(Boolean) : !bad && analysis.parsed.children.length ? analysis.parsed.children.map((n) => flat(n.spans.map(([a, b]) => query.slice(a, b)).join(" "))) : [flat(query)];
+    const pieces = raw.map((l) => l.replace(/,$/, ""));
     const autoName = analysis.parsed.children.map((n) => n.type === "cond" ? n.parts ? n.parts.map((p) => p.v).join(", ") : String(n.value) : engine.chipText(n)).filter(Boolean).join(" \xB7 ").slice(0, 80);
     const failed = (e) => e instanceof Error ? e.message : String(e);
     const submitDraft = () => {
@@ -1149,7 +1153,7 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
               onFocus: (e) => showTip(e.currentTarget, s.pinned ? labels.unpinShort : labels.pinShort),
               onMouseLeave: () => setTip(null),
               onBlur: () => setTip(null),
-              onClick: () => onPinSaved(s, !s.pinned),
+              onClick: () => (setTip(null), onPinSaved(s, !s.pinned)),
               children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("svg", { ...ICON, children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("path", { d: s.pinned ? "M9 3h6l-1 6 4 4H6l4-4zM12 13v8M4 4l16 16" : "M9 3h6l-1 6 4 4H6l4-4zM12 13v8" }) })
             }
           ),
@@ -1163,7 +1167,7 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
               onFocus: (e) => showTip(e.currentTarget, labels.createAlert),
               onMouseLeave: () => setTip(null),
               onBlur: () => setTip(null),
-              onClick: () => onCreateAlert(s.query, s),
+              onClick: () => (setTip(null), onCreateAlert(s.query, s)),
               children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("svg", { ...ICON, children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("path", { d: "M6 16v-5a6 6 0 0 1 12 0v5l2 2H4zM10 21h4" }) })
             }
           ),
@@ -1177,7 +1181,7 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
               onFocus: (e) => showTip(e.currentTarget, labels.editShort),
               onMouseLeave: () => setTip(null),
               onBlur: () => setTip(null),
-              onClick: () => onUpdateSaved ? setEditing({ key: s.id ?? s.name, name: s.name, query: s.query, error: "", busy: false }) : onEditSaved?.(s),
+              onClick: () => (setTip(null), onUpdateSaved ? setEditing({ key: s.id ?? s.name, name: s.name, query: s.query, error: "", busy: false }) : onEditSaved?.(s)),
               children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("svg", { ...ICON, children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("path", { d: "M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4" }) })
             }
           ),
@@ -1191,7 +1195,7 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
               onFocus: (e) => showTip(e.currentTarget, labels.removeShort),
               onMouseLeave: () => setTip(null),
               onBlur: () => setTip(null),
-              onClick: () => setRemoving({ key: s.id ?? s.name, error: "", busy: false }),
+              onClick: () => (setTip(null), setRemoving({ key: s.id ?? s.name, error: "", busy: false })),
               children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("svg", { ...ICON, children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("path", { d: "M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" }) })
             }
           )
@@ -1207,7 +1211,7 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
               /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("svg", { ...ICON, className: "lqb-funnel", children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("path", { d: "M3 5h18l-7 8v6l-4 2v-8z" }) }),
               /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "lqb-edit", children: [
                 summarize ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "lqb-summary", ref: sumRef, "data-overflow": fit.over || void 0, "aria-hidden": "true", children: pieces.map((p, i) => /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("span", { className: "lqb-piece", children: [
-                  i > 0 && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "lqb-sep", children: stack ? ", " : " " }),
+                  i > 0 && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "lqb-sep", children: raw[i - 1].endsWith(",") ? ", " : " " }),
                   bad ? hl : paint(p, `p${i}`)
                 ] }, i)) }) : /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "lqb-hl", ref: hlRef, "aria-hidden": "true", children: hl }),
                 textarea

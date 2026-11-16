@@ -91,7 +91,10 @@ describe('operator "="', () => {
       ['app !~', 'app !~ ', [0, 4]]
     ])
     expect(s.items.every((i) => i.kind === 'operator' && i.keep && i.hint)).toBe(true)
-    expect(e.suggest('level = ERROR content  ', 23).items.map((i) => i.text)).toEqual(['content = ', 'content != ', 'content =~ ', 'content !~ '])
+    expect(e.suggest('level = ERROR content  ', 23).items.map((i) => i.text)).toEqual(['content = ""', 'content != ""', 'content =~ ', 'content !~ '])
+    expect(e.suggest('level = ERROR content  ', 23).items.map((i) => i.caret)).toEqual([11, 12, undefined, undefined])
+    expect(e.suggest('content = ""', 11).note).toMatch(/exact phrase/)
+    expect(e.suggest('app = ""', 7).note).toBeUndefined()
     expect(e.suggest('level = ERROR content ', 22).items[0].hint).toMatch(/Contains this text/)
     expect(e.suggest('-app ', 5).items[1].text).toBe('-app != ')
     expect(e.suggest('timeout ', 8).head).toBe('Fields')

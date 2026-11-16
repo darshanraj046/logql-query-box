@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.3
+
+Changed:
+
+- In the bar, picking `content =` or `content !=` from the operator list writes `content = ""` and puts the caret between the quotes, so multi-word text is an exact phrase. The hint inside the quotes says to delete them to use `*` as a wildcard. Other operators and fields are unchanged.
+- The closed bar no longer shows a comma between filters where the text has none. `content = Connection Pool check level = WARN` was shown as `Connection, Pool, check, level = WARN`. A comma now appears only where the text has one, so a stacked query without trailing commas shows its filters separated by spaces.
+- The tooltip on a saved query's action buttons is cleared when Edit, Delete, Pin or Create alert is clicked, and whenever its button leaves the page. It used to stay on screen after Edit.
+- The edit form in the Queries panel uses the surface colour (white) for the form and the query box instead of grey.
+
 ## 0.6.2
 
 Changed:

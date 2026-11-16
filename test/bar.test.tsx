@@ -384,6 +384,13 @@ describe('bar variant', () => {
       expect(box()).toHaveValue(typed)
     })
 
+    it('shows no comma in the closed summary where the text has none', async () => {
+      const { container } = setup({ stacked: true, defaultValue: 'content = Connection Pool check level = WARN, INFO app.type = JAVA' })
+      const summary = container.querySelector('.lqb-summary') as HTMLElement
+      expect(summary.textContent).not.toMatch(/Connection,|Pool,|check,|JAVA,/)
+      expect(summary.textContent).toContain('WARN, INFO')
+    })
+
     it('shows the closed summary with the same commas', async () => {
       const { container } = setup({ stacked: true, defaultValue: 'app = accounts-service,\nlevel = WARN' })
       const summary = container.querySelector('.lqb-summary') as HTMLElement
@@ -537,6 +544,20 @@ describe('bar variant', () => {
       expect(screen.getByRole('tooltip')).toHaveTextContent('Delete')
     })
 
+    it('drops the tooltip when edit, delete, pin or alert is clicked', async () => {
+      const { user } = setup({ saved, onPinSaved: vi.fn(), onDeleteSaved: vi.fn(), onCreateAlert: vi.fn(), onUpdateSaved: vi.fn() })
+      await user.click(queriesButton())
+      for (const i of [2, 3, 0, 1]) {
+        const btn = [...document.querySelectorAll('.lqb-q-acts .lqb-icon-btn')][i]
+        await user.hover(btn)
+        expect(screen.getByRole('tooltip')).toBeInTheDocument()
+        await user.click(btn)
+        expect(screen.queryByRole('tooltip')).toBeNull()
+        if (i === 2) await user.click(screen.getByRole('button', { name: 'Cancel' }))
+        if (i === 3) await user.click(screen.getByRole('button', { name: 'Cancel' }))
+      }
+    })
+
     it('shows the full name and query when the row is cut off, and stays quiet when it is not', async () => {
       const { user } = setup({ saved })
       await user.click(queriesButton())
@@ -579,7 +600,9 @@ describe('bar variant', () => {
     await user.click(box())
     await user.click(screen.getByText('content'))
     await user.click(screen.getByText('content ='))
-    expect(document.querySelector('.lqb-sg-note')).toHaveTextContent(/Use \* as a wildcard/)
+    expect(box()).toHaveValue('content = ""')
+    expect((box() as HTMLTextAreaElement).selectionStart).toBe(11)
+    expect(document.querySelector('.lqb-sg-note')).toHaveTextContent(/exact phrase.*\* as a wildcard/)
     await user.keyboard('{Control>}a{/Control}content =~ ')
     expect(document.querySelector('.lqb-sg-note')).toHaveTextContent(/regular expression, for example timeout\|refused/)
     expect(screen.getAllByRole('option').map((o) => o.querySelector('code')?.textContent)).toEqual(['^ …', '… $', '^ … $', '… | …', '… .* …', '\\b … \\b', '(?i) …', '\\Q … \\E'])

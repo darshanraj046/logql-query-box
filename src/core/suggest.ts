@@ -64,7 +64,10 @@ export function sortedSaved(saved: SavedQuery[]): SavedQuery[] {
 
 export function suggest(src: string, caret: number, schema: ResolvedSchema, known: KnownValues, extras: SuggestExtras = {}): SuggestionList {
   const tk = tokenAtCaret(src, caret, schema)
-  if (tk.inside) return NOTHING
+  if (tk.inside) {
+    const quoted = schema.operator === '=' && src[caret] === '"' && src[caret - 1] === '"' ? /(?:^|\s)-?([A-Za-z_][A-Za-z0-9_.]*)\s*!?=\s*"$/.exec(src.slice(0, caret)) : null
+    return quoted && schema.alias.get(quoted[1].toLowerCase()) === schema.lineField ? { ...NOTHING, note: 'Type the exact phrase to find. Delete the quotes to use * as a wildcard.' } : NOTHING
+  }
   const items: Suggestion[] = []
   const text = tk.text
   const neg = text[0] === '-' ? '-' : ''
@@ -94,7 +97,11 @@ export function suggest(src: string, caret: number, schema: ResolvedSchema, know
               ['=~', 'Contains some text, or matches a pattern'],
               ['!~', 'Does not contain the text or match the pattern']
             ]
-      for (const [o, hint] of choices) items.push({ kind: 'operator', label: `${lead.value} ${o}`, hint, replace: [lead.s, caret], text: `${src.slice(lead.s, lead.e)} ${o} `, keep: true })
+      for (const [o, hint] of choices) {
+        const head = `${src.slice(lead.s, lead.e)} ${o} `
+        const pair = target === schema.lineField && (o === '=' || o === '!=')
+        items.push({ kind: 'operator', label: `${lead.value} ${o}`, hint, replace: [lead.s, caret], text: pair ? `${head}""` : head, ...(pair ? { caret: head.length + 1 } : {}), keep: true })
+      }
       return { head: `How should ${f.label} match?`, items, extra: [], note: 'Press [Enter] to choose how it matches' }
     }
   }
