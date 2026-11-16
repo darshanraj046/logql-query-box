@@ -208,3 +208,5 @@ export function genExtendedQuery(r: () => number, depth = 0): string {
   }
   return parts.join(' ')
 }
+
+export const exact = (text: string) => (_: string, el: Element | null) => !!el && el.textContent === text && [...el.children].every((c) => c.textContent !== text)

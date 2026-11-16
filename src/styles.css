@@ -701,6 +701,10 @@
   color: var(--lqb-muted);
 }
 
+.lqb .lqb-nf-f {
+  color: var(--lqb-field-color, var(--lqb-accent));
+}
+
 .lqb-nf-text code {
   padding: 1px 6px;
   font-family: inherit;

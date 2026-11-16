@@ -216,8 +216,8 @@ var defaultLabels = {
   dismiss: "Dismiss",
   notFoundTitle: (label, regex) => regex ? `No ${label} matches` : `No ${label} is exactly`,
   notFoundBody: (_label, value, regex, negative, hasMatches) => {
-    if (regex) return /^\^[\w.-]+\$$/.test(value) ? "" : `${negative ? "Nothing was excluded" : "Nothing matches it"}.`;
-    return `${negative ? "Nothing was excluded" : "Nothing matches it"}.${hasMatches ? "" : " Check the spelling."}`;
+    if (regex) return negative && !/^\^[\w.-]+\$$/.test(value) ? "Nothing was excluded." : "";
+    return `${negative ? "Nothing was excluded." : ""}${hasMatches ? "" : `${negative ? " " : ""}Check the spelling.`}`;
   },
   didYouMean: "Did you mean",
   notFieldTitle: "This is not a field",
@@ -249,9 +249,9 @@ var defaultLabels = {
   edit: (name) => `Edit ${name}`,
   remove: (name) => `Delete ${name}`,
   alertFor: (name) => `Create an alert from ${name}`,
-  unknownValue: (label, value, negative, hasMatches) => `No ${label} is exactly \u201C${value}\u201D, so ${negative ? "nothing was excluded" : "nothing matches it"}.${hasMatches ? " Did you mean:" : " Check the spelling."}`,
+  unknownValue: (label, value, negative, hasMatches) => `No ${label} is exactly \u201C${value}\u201D${negative ? ", so nothing was excluded" : ""}.${hasMatches ? " Did you mean:" : " Check the spelling."}`,
   containing: (label, value, negative) => `${negative ? "Every" : "Any"} ${label} containing \u201C${value}\u201D`,
-  unknownPattern: (label, pattern, negative, hasMatches) => `No ${label} matches \u201C${pattern}\u201D, so ${negative ? "nothing was excluded" : "nothing matches it"}. ^ means starts with and $ means ends with.${hasMatches ? " Did you mean:" : ""}`,
+  unknownPattern: (label, pattern, negative, hasMatches) => `No ${label} matches \u201C${pattern}\u201D${negative ? ", so nothing was excluded" : ""}. ^ means starts with and $ means ends with.${hasMatches ? " Did you mean:" : ""}`,
   startingWith: (label, value, negative) => `${negative ? "Every" : "Any"} ${label} starting with \u201C${value}\u201D`,
   confirmRemove: (name) => `Delete \u201C${name}\u201D?`,
   removing: "Deleting\u2026",
@@ -451,6 +451,20 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
   const unknownLabel = unknown ? unknownField?.label ?? unknown.field : "";
   const unknownLit = unknown ? unknown.value.replace(/^\^/, "").replace(/\$$/, "") : "";
   const unknownAt = unknown ? query.lastIndexOf(unknown.value) : -1;
+  const fieldRe = (0, import_react2.useMemo)(
+    () => new RegExp(
+      `(?<![\\w.-])(${[...engine.schema.fields.values()].map((f) => f.label).sort((a, b) => b.length - a.length).map(import_core.reEsc).join("|")})(?![\\w.-])`
+    ),
+    [engine]
+  );
+  const tint = (text) => {
+    const m = fieldRe.exec(text);
+    return m ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(import_jsx_runtime3.Fragment, { children: [
+      text.slice(0, m.index),
+      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "lqb-nf-f", children: m[0] }),
+      text.slice(m.index + m[0].length)
+    ] }) : text;
+  };
   const notFoundBody = unknown ? labels.notFoundBody(unknownLabel, unknown.value, !!unknown.regex, unknown.negative, unknown.matches.length > 0) : "";
   const loose = query === checked && muted !== query && interactive && bar ? analysis.freeText : void 0;
   const fixes = loose ? [{ title: labels.fixSearchText(loose.value), icon: "lines", next: loose.fix }] : unknown ? [
@@ -913,7 +927,7 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
   const suggestions = shown && sugg && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: ["lqb-sugg", classNames.suggestions].filter(Boolean).join(" "), ref: listRef, id: listId, role: "listbox", "aria-label": labels.ariaLabel, onMouseDown: (e) => e.preventDefault(), children: [
     sugg.items.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { role: "group", "aria-label": sugg.head || labels.ariaLabel, children: [
       sugg.head && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "lqb-sg-h", "aria-hidden": "true", children: [
-        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { children: sugg.head }),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { children: tint(sugg.head) }),
         sugg.count != null && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "lqb-sg-count", children: labels.available(sugg.count) })
       ] }),
       sugg.items.map((it, i) => row(it, i))
@@ -933,7 +947,7 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
       /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "lqb-nf-ic", "aria-hidden": "true", children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("svg", { ...ICON, width: 14, height: 14, children: FIELD_ICONS.warn }) }),
       /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "lqb-nf-text", children: [
         /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "lqb-nf-title", children: [
-          unknown ? labels.notFoundTitle(unknownLabel, !!unknown.regex) : labels.notFieldTitle,
+          unknown ? tint(labels.notFoundTitle(unknownLabel, !!unknown.regex)) : labels.notFieldTitle,
           " ",
           /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("code", { children: unknown ? unknown.value : loose?.value })
         ] }),
@@ -957,7 +971,7 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
           },
           children: [
             /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "lqb-sg-ic", "aria-hidden": "true", children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("svg", { viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "1.75", strokeLinecap: "round", strokeLinejoin: "round", children: FIELD_ICONS[f.icon] }) }),
-            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "lqb-nf-fix-text", children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "lqb-nf-fix-title", children: f.title }) }),
+            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "lqb-nf-fix-text", children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "lqb-nf-fix-title", children: tint(f.title) }) }),
             i === pickedFix && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("kbd", { className: "lqb-key", children: "Enter" })
           ]
         },
@@ -965,10 +979,10 @@ var LogQLQueryBox = (0, import_react2.forwardRef)(function LogQLQueryBox2(props,
       ))
     ] })
   ] }) : unknown && !(shown && sugg) && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "lqb-unknown", role: "status", children: [
-    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { children: unknown.regex ? labels.unknownPattern(unknownLabel, unknown.value, unknown.negative, unknown.matches.length > 0) : labels.unknownValue(unknownLabel, unknown.value, unknown.negative, unknown.matches.length > 0) }),
+    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { children: tint(unknown.regex ? labels.unknownPattern(unknownLabel, unknown.value, unknown.negative, unknown.matches.length > 0) : labels.unknownValue(unknownLabel, unknown.value, unknown.negative, unknown.matches.length > 0)) }),
     unknown.matches.map((v) => /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { type: "button", className: "lqb-fix", onClick: () => commit(engine.replaceValue(query, unknown.field, unknown.value, v, unknown.negative)), children: v }, v)),
-    unknown.regex && /^\^[\w.-]+\$?$/.test(unknown.value) && unknown.matches.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { type: "button", className: "lqb-fix", onClick: () => commit(engine.replaceValue(query, unknown.field, unknown.value, `${unknownLit}*`, unknown.negative)), children: labels.startingWith(unknownLabel, unknownLit, unknown.negative) }),
-    unknown.matches.length > 1 && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { type: "button", className: "lqb-fix", onClick: () => commit(engine.replaceValue(query, unknown.field, unknown.value, `*${unknownLit}*`, unknown.negative)), children: labels.containing(unknownLabel, unknownLit, unknown.negative) }),
+    unknown.regex && /^\^[\w.-]+\$?$/.test(unknown.value) && unknown.matches.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { type: "button", className: "lqb-fix", onClick: () => commit(engine.replaceValue(query, unknown.field, unknown.value, `${unknownLit}*`, unknown.negative)), children: tint(labels.startingWith(unknownLabel, unknownLit, unknown.negative)) }),
+    unknown.matches.length > 1 && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { type: "button", className: "lqb-fix", onClick: () => commit(engine.replaceValue(query, unknown.field, unknown.value, `*${unknownLit}*`, unknown.negative)), children: tint(labels.containing(unknownLabel, unknownLit, unknown.negative)) }),
     dismiss
   ] }));
   const errorBox = analysis.error && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "lqb-error", id: errorId, role: "alert", children: [

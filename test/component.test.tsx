@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { createRef, StrictMode, useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { createEngine, LogQLQueryBox, type LogQLQueryBoxHandle, type LogQLQueryBoxProps } from '../src'
-import { engineValues, SAVED } from './helpers'
+import { engineValues, exact, SAVED } from './helpers'
 
 const box = () => screen.getByRole('combobox') as HTMLTextAreaElement
 const options = () => screen.queryAllByRole('option')
@@ -236,7 +236,7 @@ describe('suggestions', () => {
     expect(box()).toHaveValue('level:')
     expect(box().selectionStart).toBe(6)
     expect(box()).toHaveFocus()
-    expect(screen.getByText('Values for Log Level')).toBeInTheDocument()
+    expect(screen.getByText(exact('Values for Log Level'))).toBeInTheDocument()
     expect(optionLabels()).toEqual(['info', 'error', 'warn', 'debug', 'unknown'])
   })
 

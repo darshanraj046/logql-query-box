@@ -1,5 +1,5 @@
 import { forwardRef, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
-import { chipLabel, createEngine, type Analysis, type Span, type Engine, type FieldValue, type FieldValues, type SavedQuery, type Schema, type Suggestion } from '../core'
+import { chipLabel, createEngine, reEsc, type Analysis, type Span, type Engine, type FieldValue, type FieldValues, type SavedQuery, type Schema, type Suggestion } from '../core'
 import { HelpDialog } from './HelpDialog'
 import { FIELD_ICONS } from './icons'
 import { defaultExamples, defaultLabels, defaultNotes, defaultSyntax, type Labels } from './labels'
@@ -247,6 +247,29 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
   const unknownLabel = unknown ? (unknownField?.label ?? unknown.field) : ''
   const unknownLit = unknown ? unknown.value.replace(/^\^/, '').replace(/\$$/, '') : ''
   const unknownAt = unknown ? query.lastIndexOf(unknown.value) : -1
+  const fieldRe = useMemo(
+    () =>
+      new RegExp(
+        `(?<![\\w.-])(${[...engine.schema.fields.values()]
+          .map((f) => f.label)
+          .sort((a, b) => b.length - a.length)
+          .map(reEsc)
+          .join('|')})(?![\\w.-])`
+      ),
+    [engine]
+  )
+  const tint = (text: string): ReactNode => {
+    const m = fieldRe.exec(text)
+    return m ? (
+      <>
+        {text.slice(0, m.index)}
+        <span className="lqb-nf-f">{m[0]}</span>
+        {text.slice(m.index + m[0].length)}
+      </>
+    ) : (
+      text
+    )
+  }
   const notFoundBody = unknown ? labels.notFoundBody(unknownLabel, unknown.value, !!unknown.regex, unknown.negative, unknown.matches.length > 0) : ''
   const loose = query === checked && muted !== query && interactive && bar ? analysis.freeText : undefined
   const fixes: { title: string; icon: string; next: string }[] = loose
@@ -760,7 +783,7 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
         <div role="group" aria-label={sugg.head || labels.ariaLabel}>
           {sugg.head && (
             <div className="lqb-sg-h" aria-hidden="true">
-              <span>{sugg.head}</span>
+              <span>{tint(sugg.head)}</span>
               {sugg.count != null && <span className="lqb-sg-count">{labels.available(sugg.count)}</span>}
             </div>
           )}
@@ -814,7 +837,7 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
           </span>
           <div className="lqb-nf-text">
             <div className="lqb-nf-title">
-              {unknown ? labels.notFoundTitle(unknownLabel, !!unknown.regex) : labels.notFieldTitle} <code>{unknown ? unknown.value : loose?.value}</code>
+              {unknown ? tint(labels.notFoundTitle(unknownLabel, !!unknown.regex)) : labels.notFieldTitle} <code>{unknown ? unknown.value : loose?.value}</code>
             </div>
             {(unknown ? notFoundBody : labels.notFieldBody) && <div className="lqb-nf-desc">{(unknown ? notFoundBody : labels.notFieldBody).split(/`([^`]*)`/).map((p, k) => (k % 2 ? <code key={k}>{p}</code> : p))}</div>}
           </div>
@@ -844,7 +867,7 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
                   </svg>
                 </span>
                 <span className="lqb-nf-fix-text">
-                  <span className="lqb-nf-fix-title">{f.title}</span>
+                  <span className="lqb-nf-fix-title">{tint(f.title)}</span>
                 </span>
                 {i === pickedFix && <kbd className="lqb-key">Enter</kbd>}
               </div>
@@ -856,7 +879,7 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
       unknown &&
       !(shown && sugg) && (
         <div className="lqb-unknown" role="status">
-          <span>{unknown.regex ? labels.unknownPattern(unknownLabel, unknown.value, unknown.negative, unknown.matches.length > 0) : labels.unknownValue(unknownLabel, unknown.value, unknown.negative, unknown.matches.length > 0)}</span>
+          <span>{tint(unknown.regex ? labels.unknownPattern(unknownLabel, unknown.value, unknown.negative, unknown.matches.length > 0) : labels.unknownValue(unknownLabel, unknown.value, unknown.negative, unknown.matches.length > 0))}</span>
           {unknown.matches.map((v) => (
             <button type="button" key={v} className="lqb-fix" onClick={() => commit(engine.replaceValue(query, unknown.field, unknown.value, v, unknown.negative))}>
               {v}
@@ -864,12 +887,12 @@ export const LogQLQueryBox = forwardRef<LogQLQueryBoxHandle, LogQLQueryBoxProps>
           ))}
           {unknown.regex && /^\^[\w.-]+\$?$/.test(unknown.value) && unknown.matches.length > 0 && (
             <button type="button" className="lqb-fix" onClick={() => commit(engine.replaceValue(query, unknown.field, unknown.value, `${unknownLit}*`, unknown.negative))}>
-              {labels.startingWith(unknownLabel, unknownLit, unknown.negative)}
+              {tint(labels.startingWith(unknownLabel, unknownLit, unknown.negative))}
             </button>
           )}
           {unknown.matches.length > 1 && (
             <button type="button" className="lqb-fix" onClick={() => commit(engine.replaceValue(query, unknown.field, unknown.value, `*${unknownLit}*`, unknown.negative))}>
-              {labels.containing(unknownLabel, unknownLit, unknown.negative)}
+              {tint(labels.containing(unknownLabel, unknownLit, unknown.negative))}
             </button>
           )}
           {dismiss}

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.5
+
+Changed:
+
+- The "No app matches ..." card and the classic notice no longer say "Nothing matches it". A pattern that matches nothing has no description line, a plain value with no close match says "Check the spelling.", and exclusions still say "Nothing was excluded." The `notFoundBody`, `unknownValue` and `unknownPattern` labels changed accordingly, so custom labels that copied the old text are unaffected.
+- Field names in messages are shown in the key colour (`--lqb-field-color`, the accent colour in the classic layout): the card title (`No app.type matches java`), the fix rows (`Exclude every app containing "pii"`), the suggestion list headers (`Add another app`, `How should level match?`) and the classic notice and its buttons. The name sits in a `span.lqb-nf-f`, so it can be styled on its own. Only the first field name in a line is coloured.
+
 ## 0.6.4
 
 Changed:

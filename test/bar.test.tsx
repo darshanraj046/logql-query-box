@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { createRef } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { LogQLQueryBox, type LogQLQueryBoxHandle, type LogQLQueryBoxProps, type SavedQuery, type Schema } from '../src'
+import { exact } from './helpers'
 
 const schema: Schema = {
   parser: 'json',
@@ -72,7 +73,7 @@ describe('bar variant', () => {
     ])
     await user.click(screen.getByText('level'))
     expect(box()).toHaveValue('level ')
-    expect(screen.getByText('How should level match?')).toBeInTheDocument()
+    expect(screen.getByText(exact('How should level match?'))).toBeInTheDocument()
     expect(opts()).toEqual(['level =', 'level !=', 'level =~', 'level !~'])
     await user.click(screen.getByText('level !='))
     expect(box()).toHaveValue('level != ')
@@ -122,7 +123,7 @@ describe('bar variant', () => {
     await user.keyboard('app = loans')
     await user.click(screen.getByText('loans-service'))
     expect(box()).toHaveValue('app = loans-service')
-    expect(screen.getByText('Add another app')).toBeInTheDocument()
+    expect(screen.getByText(exact('Add another app'))).toBeInTheDocument()
     expect(opts()).toEqual(['accounts-service', 'cards-service'])
     await user.click(screen.getByText('accounts-service'))
     expect(box()).toHaveValue('app = loans-service, accounts-service')
@@ -140,7 +141,7 @@ describe('bar variant', () => {
     await user.click(box())
     await user.keyboard('app = loans-service, ')
     await user.keyboard('{Backspace}{Backspace}')
-    expect(screen.getByText('Add another app')).toBeInTheDocument()
+    expect(screen.getByText(exact('Add another app'))).toBeInTheDocument()
     expect(screen.getByText('accounts-service')).toBeInTheDocument()
   })
 
@@ -237,7 +238,7 @@ describe('bar variant', () => {
     it('keeps the regex and drops the closing anchor for a starts-with match', async () => {
       const { user } = setup({ defaultValue: 'level = INFO app =~ ^accounts$', values: banking })
       await user.click(run())
-      await user.click(within(note() as HTMLElement).getByText('Match every app starting with “accounts”'))
+      await user.click(within(note() as HTMLElement).getByText(exact('Match every app starting with “accounts”')))
       expect(box()).toHaveValue('level = INFO app =~ ^accounts')
       expect(note()).toBeNull()
     })
@@ -283,7 +284,22 @@ describe('bar variant', () => {
       const { user } = setup({ defaultValue: 'app = zzz', values: { serviceName: ['a'] } })
       await user.click(run())
       expect(note()?.querySelector('.lqb-nf-title')).toHaveTextContent('No app is exactly zzz')
-      expect(note()?.querySelector('.lqb-nf-desc')).toHaveTextContent('Nothing matches it. Check the spelling.')
+      expect(note()?.querySelector('.lqb-nf-desc')).toHaveTextContent('Check the spelling.')
+    })
+
+    it('shows the field name in its own key-coloured element in the card title', async () => {
+      const { user } = setup({ defaultValue: 'app.type =~ java', values: { serviceType: ['JAVA', 'NODE'] } })
+      await user.click(run())
+      expect([...note()!.querySelectorAll('.lqb-nf-title .lqb-nf-f')].map((n) => n.textContent)).toEqual(['app.type'])
+      expect(note()?.querySelector('.lqb-nf-title code')).toHaveTextContent('java')
+    })
+
+    it('has no description line for a pattern that matches nothing, and never says "Nothing matches it"', async () => {
+      const { user } = setup({ defaultValue: 'app =~ zzz', values: { serviceName: ['a'] } })
+      await user.click(run())
+      expect(note()?.querySelector('.lqb-nf-title')).toHaveTextContent('No app matches')
+      expect(note()?.querySelector('.lqb-nf-desc')).toBeNull()
+      expect(note()).not.toHaveTextContent('Nothing matches it')
     })
 
     it('can be dismissed, and comes back for the next unknown value', async () => {
@@ -630,7 +646,7 @@ describe('bar variant', () => {
     expect(note.querySelector('.lqb-nf-title')).toHaveTextContent('No app is exactly pii')
     expect(note.querySelector('.lqb-nf-desc')).toHaveTextContent('Nothing was excluded.')
     expect([...note.querySelectorAll('.lqb-nf-fix-title')].map((b) => b.textContent)).toEqual(['Use “pii-detector”', 'Use “pii-scanner”', 'Exclude every app containing “pii”'])
-    await user.click(within(note).getByText('Exclude every app containing “pii”'))
+    await user.click(within(note).getByText(exact('Exclude every app containing “pii”')))
     expect(box()).toHaveValue('app != policy-evaluator, *pii*')
     expect(onExecute).toHaveBeenLastCalledWith(expect.objectContaining({ query: 'app != policy-evaluator, *pii*' }))
     expect(document.querySelector('.lqb-nf')).toBeNull()
@@ -639,7 +655,7 @@ describe('bar variant', () => {
   it('hides the fix prompt while the query is being edited', async () => {
     const { user } = setup({ defaultValue: 'app = zzz', values: { serviceName: ['a'] } })
     await user.click(screen.getByRole('button', { name: 'Run query' }))
-    expect(document.querySelector('.lqb-nf-desc')).toHaveTextContent('Nothing matches it. Check the spelling.')
+    expect(document.querySelector('.lqb-nf-desc')).toHaveTextContent('Check the spelling.')
     await user.click(box())
     await user.keyboard('z')
     expect(document.querySelector('.lqb-nf')).toBeNull()
@@ -799,7 +815,7 @@ describe('bar variant', () => {
     const note = document.querySelector('.lqb-nf') as HTMLElement
     expect(note.querySelector('.lqb-nf-title')).toHaveTextContent('No app matches ^passive$')
     expect([...note.querySelectorAll('.lqb-nf-fix-title')].map((b) => b.textContent)).toEqual(['Use “passive-scan-consumer”', 'Match every app starting with “passive”'])
-    await user.click(within(note).getByText('Match every app starting with “passive”'))
+    await user.click(within(note).getByText(exact('Match every app starting with “passive”')))
     expect(box()).toHaveValue('level = INFO app =~ ^passive')
     expect(onExecute).toHaveBeenLastCalledWith(expect.objectContaining({ query: 'level = INFO app =~ ^passive' }))
   })

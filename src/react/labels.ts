@@ -116,8 +116,8 @@ export const defaultLabels: Labels = {
   dismiss: 'Dismiss',
   notFoundTitle: (label, regex) => (regex ? `No ${label} matches` : `No ${label} is exactly`),
   notFoundBody: (_label, value, regex, negative, hasMatches) => {
-    if (regex) return /^\^[\w.-]+\$$/.test(value) ? '' : `${negative ? 'Nothing was excluded' : 'Nothing matches it'}.`
-    return `${negative ? 'Nothing was excluded' : 'Nothing matches it'}.${hasMatches ? '' : ' Check the spelling.'}`
+    if (regex) return negative && !/^\^[\w.-]+\$$/.test(value) ? 'Nothing was excluded.' : ''
+    return `${negative ? 'Nothing was excluded.' : ''}${hasMatches ? '' : `${negative ? ' ' : ''}Check the spelling.`}`
   },
   didYouMean: 'Did you mean',
   notFieldTitle: 'This is not a field',
@@ -149,9 +149,9 @@ export const defaultLabels: Labels = {
   edit: (name) => `Edit ${name}`,
   remove: (name) => `Delete ${name}`,
   alertFor: (name) => `Create an alert from ${name}`,
-  unknownValue: (label, value, negative, hasMatches) => `No ${label} is exactly “${value}”, so ${negative ? 'nothing was excluded' : 'nothing matches it'}.${hasMatches ? ' Did you mean:' : ' Check the spelling.'}`,
+  unknownValue: (label, value, negative, hasMatches) => `No ${label} is exactly “${value}”${negative ? ', so nothing was excluded' : ''}.${hasMatches ? ' Did you mean:' : ' Check the spelling.'}`,
   containing: (label, value, negative) => `${negative ? 'Every' : 'Any'} ${label} containing “${value}”`,
-  unknownPattern: (label, pattern, negative, hasMatches) => `No ${label} matches “${pattern}”, so ${negative ? 'nothing was excluded' : 'nothing matches it'}. ^ means starts with and $ means ends with.${hasMatches ? ' Did you mean:' : ''}`,
+  unknownPattern: (label, pattern, negative, hasMatches) => `No ${label} matches “${pattern}”${negative ? ', so nothing was excluded' : ''}. ^ means starts with and $ means ends with.${hasMatches ? ' Did you mean:' : ''}`,
   startingWith: (label, value, negative) => `${negative ? 'Every' : 'Any'} ${label} starting with “${value}”`,
   confirmRemove: (name) => `Delete “${name}”?`,
   removing: 'Deleting…',
