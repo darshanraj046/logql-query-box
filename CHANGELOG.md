@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.2
+
+Changed:
+
+- The suggestion list and the Queries panel list no longer show a scrollbar. They still scroll. New variables `--lqb-scrollbar-width` (`none` by default, `thin` or `auto`), `--lqb-scrollbar-thumb` and `--lqb-scrollbar-track` bring it back and style it from your own CSS.
+
 ## 0.6.1
 
 Changed:

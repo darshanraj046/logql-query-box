@@ -579,6 +579,18 @@ The bar adds its own variables on `.lqb-v-bar`:
 }
 ```
 
+The suggestion list and the Queries panel list scroll without a visible scrollbar. To show one, set these on `.lqb` (or any parent):
+
+```css
+.lqb {
+  --lqb-scrollbar-width: thin;
+  --lqb-scrollbar-thumb: #94a3b8;
+  --lqb-scrollbar-track: transparent;
+}
+```
+
+`--lqb-scrollbar-width` takes `none` (default), `thin` or `auto`. For full control, target `.lqb-sugg` and `.lqb-q-list` yourself.
+
 `--lqb-bar-font-size` and `--lqb-bar-font-weight` set the query text in the bar and the suggestion values under it, so both always match. The clear and copy buttons size and centre themselves from `--lqb-bar-height`.
 
 All class names start with `lqb-`, and the stylesheet does not touch anything outside the component. For anything a variable does not cover, add your own class through `classNames` or target the `lqb-` classes.
