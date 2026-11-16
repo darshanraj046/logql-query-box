@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.4
+
+Changed:
+
+- In `=` mode, `engine.combine()` (run on Run and on blur) joins and quotes typed words that spell a known value containing spaces, so `app = loans service` becomes `app = "loans service"` and `app = accounts-service, loans service` becomes `app = accounts-service, "loans service"`. It only acts when the words equal a known value of a non-line field (ignoring case, written with the known spelling), works with `=` and `!=`, and leaves regex operators, the line field, words split over lines, quoted values and any other text as typed.
+
 ## 0.6.3
 
 Changed:

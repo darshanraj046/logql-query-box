@@ -202,6 +202,37 @@ export function createEngine(options: EngineOptions = {}): Engine {
     clearField: (query, field) => clearField(query, parseQuery(query), schema, field),
     combine(query) {
       let q = query
+      if (schema.operator === '=') {
+        const toks = tokenize(q, schema).toks.filter((t) => t.t !== 'skip')
+        const joins: [number, number, string][] = []
+        toks.forEach((t, i) => {
+          if (t.t !== 'term' || !t.field || t.field === schema.lineField || !t.parts?.length || (joins.length && t.s < joins[joins.length - 1][1])) return
+          const op = /[A-Za-z_][A-Za-z0-9_.]*\s*(!=|=)\s*/y
+          op.lastIndex = q[t.s] === '-' ? t.s + 1 : t.s
+          if (!op.test(q)) return
+          const f = schema.fields.get(t.field)
+          const names = [...new Set([...(f?.values ?? []), ...(known.get(t.field)?.keys() ?? [])])].filter((v) => v.includes(' '))
+          if (!names.length) return
+          const last = t.parts[t.parts.length - 1]
+          const comma = q[t.e - 1] === ','
+          const words: string[] = comma ? [] : [last.v]
+          let start = comma ? -1 : t.e - last.v.length
+          if (!comma && (last.wild || q.slice(start, t.e) !== last.v)) return
+          let best: [number, string] | null = null
+          for (let k = i + 1; k < toks.length; k++) {
+            const w = toks[k]
+            if (w.t !== 'term' || w.field || w.kind !== 'word' || !/^[ \t]+$/.test(q.slice(k === i + 1 ? t.e : toks[k - 1].e, w.s))) break
+            if (start < 0) start = w.s
+            const text = (w.value as string).replace(/,$/, '')
+            words.push(text)
+            const name = names.find((n) => n.toLowerCase() === words.join(' ').toLowerCase())
+            if (name) best = [w.s + text.length, name]
+            if ((w.value as string).endsWith(',')) break
+          }
+          if (best) joins.push([start, best[0], best[1]])
+        })
+        for (const [a, b, name] of joins.reverse()) q = q.slice(0, a) + quoteValue(name) + q.slice(b)
+      }
       for (let pass = 0; pass < 50; pass++) {
         const parsed = parseQuery(q)
         const node = parsed.error ? undefined : (parsed.children.find((n) => n.type === 'cond' && !!n.parts && (n.spans as Span[]).length > 1) as Cond | undefined)

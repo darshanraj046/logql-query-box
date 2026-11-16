@@ -286,6 +286,20 @@ describe('operator "="', () => {
     expect(e.analyze('cscsdcs').freeText).toBeUndefined()
   })
 
+  it('quotes typed words that spell a known value with spaces', () => {
+    const sp = createEngine({ schema: { ...schema, fields: { ...schema.fields, serviceName: { label: 'app', aliases: ['app'], values: ['loans service', 'accounts-service', 'big data hub'] } } }, baseSelector: { index: 'a' } })
+    expect(sp.combine('app = loans service')).toBe('app = "loans service"')
+    expect(sp.combine('app != loans service')).toBe('app != "loans service"')
+    expect(sp.combine('app = Loans  Service')).toBe('app = "loans service"')
+    expect(sp.combine('app = loans service, accounts-service')).toBe('app = "loans service", accounts-service')
+    expect(sp.combine('app = accounts-service, loans service')).toBe('app = accounts-service, "loans service"')
+    expect(sp.combine('app = loans service level = WARN')).toBe('app = "loans service" level = WARN')
+    expect(sp.combine('app = big data hub, accounts-service')).toBe('app = "big data hub", accounts-service')
+    expect(sp.analyze(sp.combine('app = loans service')).unknownValues).toEqual([])
+    expect(sp.combine('app = loans service hub')).toBe('app = "loans service" hub')
+    for (const q of ['app = loans', 'app = loans\nservice', 'app = "loans service"', 'app = payments service', 'content = loans service', 'app =~ loans service']) expect(sp.combine(q), q).toBe(q)
+  })
+
   it('combines repeated filters on the same field', () => {
     expect(e.combine('app != policy-evaluator app != pii')).toBe('app != policy-evaluator, pii')
     expect(e.combine('level = ERROR timeout level = WARN')).toBe('level = ERROR, WARN timeout')
